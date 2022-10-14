@@ -1,0 +1,30 @@
+extends layout
+
+block content
+  p id !{id}
+  p name !{name}
+  p players !{players}
+  p players !{playerStrings}
+  p communityCards !{communityCards}
+  p deck !{deck}
+  p round !{round}
+  p winners !{winners}
+
+  p table
+    button start round
+    button end round
+    button player join
+    button player leave
+
+  each player, i in players
+    p player !{player.name}
+      button fold
+      button check
+      button bet
+      button raise
+      button call
+      button all in
+
+  script(src="https://unpkg.com/vue@3/dist/vue.global.js")
+  script.
+    alert('done')
