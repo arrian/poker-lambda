@@ -11,9 +11,15 @@ var table = new Table('test');
 var player1 = new Player('player 1');
 var player2 = new Player('player 2');
 var player3 = new Player('player 3');
+var player4 = new Player('player 4');
+var player5 = new Player('player 5');
+var player6 = new Player('player 6');
 table.join(player1);
 table.join(player2);
 table.join(player3);
+table.join(player4);
+table.join(player5);
+table.join(player6);
 table.startRound();
 
 var indexRouter = require('./routes/index');
@@ -67,8 +73,8 @@ app.get('/status', function(req, res) {
 app.post('/action', function(req, res) {
   console.log(req.body);
 
-  if(req.body.player === table.round?.actingPlayer?.id || !req.body.player) {
-    table.act(req.body.player ? table.round.actingPlayer : null, {
+  if(req.body.player === table.round?.actingPlayer || !req.body.player) {
+    table.act(req.body.player, {
       type: req.body.action,
       data: req.body.data
     });

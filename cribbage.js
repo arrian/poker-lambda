@@ -34,13 +34,10 @@ class Card {
 		if(_.isString(value) && !suit) {
 			suit = value.length === 2 ? value[1] : value[2];
 			value = value.length === 2 ? value[0] : value[0] + value[1];
-			this.value = value;
-			this.suit = suit;
-			this.rank = _.find(Values, (v, i) => i);
-		} else {
-			this.value = value;
-			this.suit = suit;
 		}
+		this.value = value;
+		this.suit = suit;
+		this.rank = Values.findIndex(v => v === value);
 	}
 
 	toString() {
@@ -54,10 +51,11 @@ class Card {
 	}
 
 	valueOf() {
-		return this.value.rank;
+		return this.rank;
 	}
 
 	isSame(card) {
+		if(!card.value || !card.suit || !this.suit || !this.value) throw new Error('Invalid card passed for isSame comparison.');
 		return this.value === card.value && this.suit === card.suit;
 	}
 
@@ -81,7 +79,7 @@ class Card {
 class Cards {
 	constructor(cards) {
 		if(_.isString(cards)) {
-			this.cards = _.map(_.split(cards, ' '), cardString => new Card(cardString));
+			this.cards = cards.split(' ').map(card => new Card(card));
 		} else {
 			this.cards = cards ? cards : [];
 		}
@@ -122,27 +120,34 @@ class Cards {
 
 		for(var i = 0; i < cards.count(); i++) {
 			var currentCard = cards.getCard(i),
-				currentLow = straight.count() > 0 ? _.last(straight.cards) : null;
+			currentLow = straight.count() > 0 ? _.last(straight.cards) : null;
+			console.log(currentCard, currentCard.valueOf(), currentLow, currentLow ? currentLow.valueOf() : null);
 
 			if(!currentLow) {
 				// first card
 				straight.add(currentCard);
+				console.log('first card');
 			} else if(currentCard.valueOf() === (currentLow.valueOf() - 1)) {
 				straight.add(currentCard);
+				console.log('found seq');
 			} else if(currentCard.valueOf() === currentLow.valueOf()) {
 				// skip duplicates
+				console.log('skip dupe');
 				continue;
 			} else {
+				console.log('reset');
 				// current straight ended and is not of required length. reset.
 				straight = new Cards();
 				straight.add(currentCard);
 			}
 
+			console.log('length', straight.count(), 'target length', length);
+
 			if(straight.count() === length) return straight;
 			else if(straight.count() === length - 1) {
 				// Determine if ace is low in the straight
-				var two = straight.containsValue(Value.TWO),
-						ace = cards.containsValue(Value.ACE);
+				var two = straight.containsValue(Two),
+						ace = cards.containsValue(Ace);
 				if(two && ace) {
 					straight.add(ace);
 					return straight;
@@ -164,7 +169,9 @@ class Cards {
 	}
 
 	getRelativeComplement(excluded) {
-		return new Cards(_.filter(this.cards, card => !_.includes(excluded, card)));
+		const excludedCards = excluded ? excluded.getCards() : [];
+		console.log('getRelativeComplement excluded', excluded);
+		return new Cards(this.cards.filter(card => !excludedCards.some(excludedCard => card.isSame(excludedCard))));
 	}
 
 	getGroupedBySuit() {
@@ -200,6 +207,7 @@ class Cards {
 	}
 
 	static isSame(leftCards, rightCards) {
+		console.log('isSame', leftCards, rightCards);
 		let same = false,
 			a = leftCards.getSorted().cards,
 			b = rightCards.getSorted().cards;
@@ -216,8 +224,8 @@ class Cards {
 
 	static compare(leftCards, rightCards) {
 		let result = 0,
-			a = leftCards.cards,
-			b = rightCards.cards;
+			a = leftCards.getSorted().cards,
+			b = rightCards.getSorted().cards;
 
 		_.some(_.zip(a, b), _.spread((aCard, bCard) => {
 			result = aCard.valueOf() - bCard.valueOf();
@@ -388,10 +396,12 @@ Hand.Type = {
 		name: 'Two Pair',
 		is: function(cards) {
 			var pairs = _.filter(cards.getGroupedByValue(), valueGroup=> valueGroup.count() === 2);
-			var twoPairs = pairs.length >= 2 ? [...pairs[0].getCards(), ...pairs[1].getCards()] : null;
+			var twoPairs = pairs.length >= 2 ? new Cards([...pairs[0].getCards(), ...pairs[1].getCards()]) : null;
+
+			console.log('two pair', pairs, twoPairs, cards.getRelativeComplement(twoPairs), cards.getRelativeComplement(twoPairs).getHighestCard());
 
 			return {
-				hand: twoPairs,
+				hand: twoPairs ? twoPairs.getCards() : null,
 				kickers: [ cards.getRelativeComplement(twoPairs).getHighestCard() ]
 			};
 		}
@@ -401,6 +411,7 @@ Hand.Type = {
 		name: 'Pair',
 		is: function(cards) {
 			var pair = _.find(cards.getGroupedByValue(), valueGroup=> valueGroup.count() === 2);
+			console.log('pair', pair, cards.getRelativeComplement(pair), cards.getRelativeComplement(pair).getHighestCards(3));
 
 			return {
 				hand: pair ? pair.getCards() : null,
@@ -414,7 +425,7 @@ Hand.Type = {
 		is: function(cards) {
 			return {
 				hand: [ cards.getHighestCard() ],
-				kickers: cards.getRelativeComplement().getHighestCards(4)
+				kickers: cards.getRelativeComplement(new Cards([cards.getHighestCard()])).getHighestCards(4)
 			};
 		}
 	}
@@ -489,23 +500,26 @@ class Round {
 
 
 		this.players = [...players];
-		this.button = players[0];
-		this.actingPlayer = players[0]; //acting player
-		// this.dealer = ;
-		// this.bigBlind = ;
-		// this.smallBlind = ;
+		this.button = players[0].id;
+		this.acted = {}; // TODO: to avoid errors it might be worth basing this on transactional data
+		this.actingPlayer = this.getNextPlayer(this.button).id;
 
 		this.log = [];
 
 		this.actions = {};
 		this.bets = {};
+		
+		this.rules = rules;
+
+		this.pots = [];
 
 		this.progress = Round.State.STARTING;
 		this.record(null, {
 			type: 'START'
 		});
 
-		this.rules = rules;
+		this.deal();
+		this.preflop();
 	}
 
 	nextState() {
@@ -535,20 +549,25 @@ class Round {
 			this.actingPlayer = null;
 			this.end();
 		} else {
-			this.players.push(this.players.shift());
-			this.actingPlayer = this.players[0];
+			this.actingPlayer = this.getNextPlayer(this.actingPlayer).id;
 		}
 	}
 
 	isAwaitingAction() {
-		const allPlayersActed = _.every(_.map(this.players, player => player.id), _.partial(_.has, this.bets));
-		if(!allPlayersActed) return true;
+		if(this.progress === Round.State.ENDED) {
+			return false;
+		}
 
-		// Either all players must match bet size or go all in
+		// All players must have acted since the last raise
+		const allActed = this.players.every(player => this.acted[player.id] || this.isPlayerAllIn(player));
+
+		return !this.isBetSizeEqual() || !allActed;
+	}
+
+	isBetSizeEqual() {
 		const bet = this.getBetSize();
-		console.log('bet', bet, this.players.map(player => this.bets[player.id] === bet || this.bets[player.id] === player.worth));
-		
-		return this.players.map(player => this.bets[player.id] === bet || this.bets[player.id] === player.worth).filter(a => a).length !== this.players.length;
+		console.log(bet, 'isBetSizeEqual', this.players.every(player => this.bets[player.id] === bet || this.isPlayerAllIn(player)));
+		return this.players.every(player => this.bets[player.id] === bet || this.isPlayerAllIn(player));
 	}
 
 	record(player, action) {
@@ -556,7 +575,7 @@ class Round {
 	}
 
 	act(player, action) {
-		if(player !== this.actingPlayer) {
+		if(player.id !== this.actingPlayer) {
 			throw new Error('Player acted out of turn');
 		}
 
@@ -576,7 +595,6 @@ class Round {
 	dead(player) {
 		this.record(player, new Action(Action.Type.DEAD));
 		this.removePlayer(player);
-		this.nextPlayer();
 	}
 
 	fold(player, action) {
@@ -586,14 +604,13 @@ class Round {
 
 		if(this.players.length < 2) {
 			this.end();
-		} else {
-			this.actingPlayer = this.players[0];
-			// this.record(this.actingPlayer, new Action(Action.Type.STARTED));
 		}
 	}
 
 	check(player, action) {
+		if(this.bets[player.id] !== this.getBetSize()) throw new Error('Check can only be called if the player bet is the same as the highest bet.');
 		this.record(player, action);
+		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.CHECK;
 	}
 
@@ -601,6 +618,8 @@ class Round {
 		if(action.data.value <= 0) throw new Error('A bet > 0 was expected');
 		if(this.getBetSize()) throw new Error('Can\'t bet after a bet. Call or raise was expected.');
 		this.record(player, action);
+		console.log(this.log, player, action);
+		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.BET;
 		this.bets[player.id] = action.data.value;
 	}
@@ -608,6 +627,8 @@ class Round {
 	raise(player, action) {
 		if(action.data.value <= this.getBetSize()) throw new Error('A raise larger than the current bet was expected.');
 		this.record(player, action);
+		this.acted = {};
+		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.RAISE;
 		this.bets[player.id] = action.data.value;
 	}
@@ -615,6 +636,7 @@ class Round {
 	call(player, action) {
 		if(action.data.value !== this.getBetSize()) throw new Error('A call must be the size of the current bet.');
 		this.record(player, action);
+		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.CALL;
 		this.bets[player.id] = action.data.value;
 	}
@@ -622,6 +644,7 @@ class Round {
 	allIn(player, action) {
 		if(action.data.value !== player.worth) throw new Error('All in must be of the size of the player worth');// fix this, depend on size of other all ins
 		this.record(player, action);
+		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.ALL_IN;
 		this.bets[player.id] = action.data.value;
 	}
@@ -631,6 +654,7 @@ class Round {
 
 		this.deck = Cards.createDeck();
 		this.deck.shuffle();
+		this.acted = {};
 
 		for(var i = 0; i < DEAL_SIZE; i++) {
 			_.each(this.players, player=>player.addCard(this.deck.draw()));
@@ -645,17 +669,17 @@ class Round {
 	preflop() {
 		if(this.rules && this.rules.blinds) {
 			this.rules.blinds.forEach((blind, index) => {
-				if(index > 0) {
-					this.raise(this.actingPlayer, {
-						type: Action.Type.RAISE,
+				if(index === 0) {
+					this.bet(this.getActingPlayer(), {
+						type: Action.Type.BET,
 						data: {
 							reason: 'Blind',
 							value: blind.value
 						}
 					});
 				} else {
-					this.bet(this.actingPlayer, {
-						type: Action.Type.BET,
+					this.raise(this.getActingPlayer(), {
+						type: Action.Type.RAISE,
 						data: {
 							reason: 'Blind',
 							value: blind.value
@@ -674,6 +698,9 @@ class Round {
 		this.communityCards.add(this.deck.draw());
 		this.communityCards.add(this.deck.draw());
 
+		this.actingPlayer = this.getNextPlayer(this.button).id;
+		this.acted = {};
+
 		this.progress = Round.State.FLOPPED;
 		this.record(null, {
 			type: Action.Type.FLOP
@@ -684,6 +711,9 @@ class Round {
 		if(this.progress !== Round.State.FLOPPED) throw new Error(`Expected ${Round.State.FLOPPED} instead of ${this.progress}`);
 
 		this.communityCards.add(this.deck.draw());
+
+		this.actingPlayer = this.getNextPlayer(this.button).id;
+		this.acted = {};
 
 		this.progress = Round.State.TURNED;
 		this.record(null, {
@@ -696,6 +726,9 @@ class Round {
 
 		this.communityCards.add(this.deck.draw());
 
+		this.actingPlayer = this.getNextPlayer(this.button).id;
+		this.acted = {};
+
 		this.progress = Round.State.RIVERED;
 		this.record(null, {
 			type: Action.Type.RIVER
@@ -706,7 +739,11 @@ class Round {
 		if(this.progress === Round.State.ENDED) {
 			return;
 		}
+		this.actingPlayer = null;
+		this.results = this.rankPlayers();
+
 		this.progress = Round.State.ENDED;
+
 		this.record(null, {
 			type: Action.Type.ROUND_END
 		});
@@ -731,6 +768,14 @@ class Round {
 		return this.communityCards[4];
 	}
 
+	getPots() {
+		// TODO: handle side pots
+		return [{
+			total: this.getPotSize(),
+			participants: this.rankPlayers()
+		}];
+	}
+
 	getWinners() {
 		if(this.players.length === 0) return null;
 		var ranked = this.rankPlayers(),
@@ -750,16 +795,51 @@ class Round {
 		return Object.values(this.bets).reduce((result, bet) => result + bet, 0);
 	}
 
+	getPlayer(id) {
+		return this.players.find(player => player.id === id);
+	}
+
+	getNextPlayer(id) {
+		const currentIndex = this.players.findIndex(player => player.id === id);
+		console.log('getNextPlayer current', currentIndex);
+		if(currentIndex < 0) throw new Error('Could not find player with id ' + id);
+		const nextIndex = (currentIndex + 1) >= this.players.length ? 0 : currentIndex + 1;
+		console.log('getNextPlayer next', nextIndex);
+		return this.players[nextIndex];
+	}
+
 	getActingPlayer() {
-		return this.actingPlayer;
+		if(!this.actingPlayer) return null;
+		return this.getPlayer(this.actingPlayer);
+	}
+
+	isPlayerAllIn(player) {
+		return this.bets[player.id] === player.worth;
 	}
 
 	rankPlayers() {
-		return _.reverse(_.map(this.players, player => ({ player: player, hand: player.getHand(this.communityCards) })).sort((left, right) => Hand.compare(left.hand, right.hand)));
+		const players = this.players.map(player => ({
+			id: player.id,
+			hand: player.getHand(this.communityCards)
+		})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
+
+		let previousPlayer = null;
+		players.forEach(player => {
+			if(!previousPlayer) {
+				player.rank = 1;
+			} else if(Hand.compare(player.hand, previousPlayer.hand) === 0) {
+				player.rank = previousPlayer.rank;
+			} else {
+				player.rank = previousPlayer.rank + 1;
+			}
+			previousPlayer = player;
+		});
+
+		return players;
 	}
 
 	removePlayer(player) {
-		if(this.actingPlayer.id === player.id) {
+		if(this.actingPlayer === player.id) {
 			this.nextPlayer();
 		}
 		_.remove(this.players, p => p.id === player.id);
@@ -782,7 +862,6 @@ class Table {
 		this.name = name;
 		this.players = [];
 		this.round = null;
-		this.winners = null;
 
 		// Rules
 		this.ante = 10;
@@ -795,10 +874,11 @@ class Table {
 		}];
 	}
 
-	act(player, action) {
-		if(!player && action.type === Action.Type.ROUND_START) this.startRound();
-		else if(!player && action.type === Action.Type.ROUND_END) this.endRound();
+	act(playerId, action) {
+		if(!playerId && action.type === Action.Type.ROUND_START) this.startRound();
+		else if(!playerId && action.type === Action.Type.ROUND_END) this.endRound();
 		else {
+			const player = this.round.getPlayer(playerId);
 			if(!this.round) throw new Error('No round currently active');
 			this.round.act(player, action);
 		}
@@ -824,8 +904,6 @@ class Table {
 			ante: this.ante,
 			blinds: this.blinds
 		});
-		this.round.deal();
-		this.round.preflop();
 	}
 
 	endRound() {

@@ -16,5 +16,8 @@
     "jade": "^0.29.0",
     "lodash": "^4.17.21",
     "morgan": "~1.9.1"
+  },
+  "devDependencies": {
+    "jest": "^29.2.0"
   }
 }

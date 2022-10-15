@@ -1,5 +1,5 @@
 {
-  "presets": ["env", "react"],
-  "plugins": ["react-hot-loader/babel", "syntax-decorators"],
+  "presets": [],
+  "plugins": [],
   "compact" : false
 }

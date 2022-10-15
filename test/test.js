@@ -1,6 +1,6 @@
 const _ = require('lodash');
 const assert = require('assert');
-const { Hand, Cards, Card, Value, Suit, Round, Player, Action } = require('../src/poker');
+const { Hand, Cards, Card, Value, Suit, Round, Player, Action } = require('../cribbage');
 
 describe('Cards', function() {
 	describe('getStraight()', function() {
@@ -85,6 +85,33 @@ describe('Hand', function() {
 
 				assert.equal(Cards.isSame(new Cards(hand), new Cards('A♥')), true);
 			});
+
+
+			it('should rank two two pairs correctly', function() {
+				var communityCards = new Cards('A♥ A♠ 3♣ 2♦ 7♥');
+				var leftCards = new Hand(new Cards('Q♣ 6♣'), communityCards); // should rank higher
+				var rightCards = new Hand(new Cards('J♣ 6♥'), communityCards); // should rank lower
+				var result = Hand.compare(leftCards, rightCards);
+
+				assert.equal(result, 1);
+
+				result = Hand.compare(rightCards, leftCards);
+
+				assert.equal(result, -1);
+			});
+
+			it('should rank two two pairs correctly with lowest card in hand to rank', function() {
+				var communityCards = new Cards('A♥ A♠ 3♣ 2♦ 7♥');
+				var leftCards = new Hand(new Cards('Q♣ 6♣'), communityCards); // should rank higher
+				var rightCards = new Hand(new Cards('Q♦ 5♥'), communityCards); // should rank lower
+				var result = Hand.compare(leftCards, rightCards);
+
+				assert.equal(result, 1);
+
+				result = Hand.compare(rightCards, leftCards);
+
+				assert.equal(result, -1);
+			});
 		});
 	});
 });
@@ -95,7 +122,7 @@ describe('Round', function() {
 		it('should return true if no players acted', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
-				round = new Round([player1, player2]);
+				round = new Round([player1, player2], null);
 
 			assert(round.isAwaitingAction());
 		});
@@ -103,9 +130,9 @@ describe('Round', function() {
 		it('should return true if all but one player calls', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
-				round = new Round([player1, player2]);
+				round = new Round([player1, player2], null);
 
-			round.act(player1, new Action(Action.Type.BET, 100));
+			round.act(player2, new Action(Action.Type.BET, { value: 100 }));
 
 			assert(round.isAwaitingAction());
 		});
@@ -113,22 +140,23 @@ describe('Round', function() {
 		it('should return false if all but one player folds', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
-				round = new Round([player1, player2]);
+				round = new Round([player1, player2], null);
 
-			round.act(player1, new Action(Action.Type.FOLD));
+			round.act(player2, new Action(Action.Type.FOLD));
 
 			assert(!round.isAwaitingAction());
 		});
 
-		it('should return false if all bets equal', function() {
+		it('should return true after flop', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
-				round = new Round([player1, player2]);
+				round = new Round([player1, player2], null);
 
-			round.act(player1, new Action(Action.Type.BET, 100));
-			round.act(player2, new Action(Action.Type.CALL, 100));
+			round.act(player2, new Action(Action.Type.BET, { value: 100 }));
+			round.act(player1, new Action(Action.Type.CALL, { value: 100 }));
 
-			assert(!round.isAwaitingAction());
+			assert(round.progress === Round.State.FLOPPED);
+			assert(round.isAwaitingAction());
 		});
 	});
 
@@ -148,20 +176,17 @@ describe('Round', function() {
 				player2 = new Player('player2'),
 				round = new Round([player1, player2]);
 
-			assert.equal(round.progress, Round.State.STARTING, 'Initial game state should be STARTING');
+			assert.equal(round.progress, Round.State.DEALT, 'First game state should be DEALT');
 
-			round.deal();
-			assert.equal(round.progress, Round.State.DEALT, 'Second game state should be DEALT');
+			round.act(player2, new Action(Action.Type.BET, { value: 100 }));
+			round.act(player1, new Action(Action.Type.CALL, { value: 100 }));
 
-			round.act(player1, new Action(Action.Type.BET, 100));
-			round.act(player2, new Action(Action.Type.CALL, 100));
-
-			assert.equal(round.progress, Round.State.FLOPPED, 'Third game state should be FLOPPED');
+			assert.equal(round.progress, Round.State.FLOPPED, 'Second game state should be FLOPPED');
 
 			round.act(player2, new Action(Action.Type.CHECK));
 			round.act(player1, new Action(Action.Type.CHECK));
 
-			assert.equal(round.progress, Round.State.TURNED, 'Fourth game state should be TURNED');
+			assert.equal(round.progress, Round.State.TURNED, 'Third game state should be TURNED');
 		});
 	});
 });

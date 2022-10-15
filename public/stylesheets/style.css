@@ -12,7 +12,7 @@ body {
   z-index: -1;
   padding: 20px;
   margin: 0;
-  font: 14px "Lucida Grande", Helvetica, Arial, sans-serif;
+  font: 14px "Helvetica Neue", Arial, sans-serif;
   font-weight: 500;
   min-height: 100vh;
 }
@@ -26,16 +26,35 @@ a {
   color: #00B7FF;
 }
 
+
+.button {
+  position: absolute;
+  right: 0;
+  top: 0;
+  background-color: white;
+  width: 64px;
+  height: 64px;
+  margin: 8px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: black;
+  text-transform: uppercase;
+}
+
 .player, .table {
   margin: 20px 20px 0px 0px;
   padding: 20px;
   display: inline-block;
   border: 1px solid white;
+  position: relative;
 }
 
 .actions {
   display: flex;
-  margin: 8px 0;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .action {
@@ -47,6 +66,13 @@ a {
 
 .deck {
   display: grid;
+  margin: 24px 0;
+}
+
+.deck-short {
+  display: flex;
+  gap: 8px;
+  margin: 24px 0;
 }
 
 .cards {
@@ -70,6 +96,11 @@ a {
   transition: transform 300ms ease-out, box-shadow 300ms ease-out;
   border-radius: 12px;
   box-shadow: 0px 0px 10px 10px rgba(0,0,0,0.1);
+}
+
+.card:hover {
+  transform: translateY(-32px);
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.320, 1);
 }
 
 /* .ace {
