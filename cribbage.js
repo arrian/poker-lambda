@@ -437,24 +437,10 @@ class Player {
 		this.name = name;
 
 		this.worth = 3000; // temp value
-
-		this.clearCards();
-	}
-
-	addCard(card) {
-		this.hand.add(card);
-	}
-
-	clearCards() {
-		this.hand = new Cards();
 	}
 
 	log() {
-		console.log(`${this.name}: ${this.hand.getSorted().toString()}`);
-	}
-
-	getHand(communityCards) {
-		return new Hand(this.hand, communityCards);
+		console.log(`${this.name}`);
 	}
 }
 
@@ -481,6 +467,7 @@ Action.Type = {
 
 	// Round
 	ROUND_START: 'ROUND_START',
+	ROUND_NEXT: 'ROUND_NEXT',
 	DEAL: 'DEAL',
 	FLOP: 'FLOP',
 	TURN: 'TURN',
@@ -493,25 +480,24 @@ class Round {
 		if(players.length <= 0) throw new Error('Can\'t start a round with no players');
 
 		this.id = cuid();
-		this.time = 0;
 
 		this.communityCards = new Cards();
 		this.deck = null;
 
-
 		this.players = [...players];
 		this.button = players[0].id;
-		this.acted = {}; // TODO: to avoid errors it might be worth basing this on transactional data
 		this.actingPlayer = this.getNextPlayer(this.button).id;
-
-		this.log = [];
-
+		
+		this.acted = {}; // TODO: to avoid errors it might be worth basing this on transactional data
 		this.actions = {};
 		this.bets = {};
+		this.cards = {};
 		
 		this.rules = rules;
-
+		
 		this.pots = [];
+
+		this.log = [];
 
 		this.progress = Round.State.STARTING;
 		this.record(null, {
@@ -571,7 +557,7 @@ class Round {
 	}
 
 	record(player, action) {
-		this.log.push({ state: this.progress, player: player, action: action, time: this.time });
+		this.log.push({ state: this.progress, player: player, action: action, time: Date.now(), step: this.log.length });
 	}
 
 	act(player, action) {
@@ -656,8 +642,10 @@ class Round {
 		this.deck.shuffle();
 		this.acted = {};
 
+		this.cards = {};
+		this.players.forEach(player => this.cards[player.id] = new Cards());
 		for(var i = 0; i < DEAL_SIZE; i++) {
-			_.each(this.players, player=>player.addCard(this.deck.draw()));
+			this.players.forEach(player => this.cards[player.id].add(this.deck.draw()));
 		}
 
 		this.progress = Round.State.DEALT;
@@ -820,7 +808,7 @@ class Round {
 	rankPlayers() {
 		const players = this.players.map(player => ({
 			id: player.id,
-			hand: player.getHand(this.communityCards)
+			hand: new Hand(this.cards[player.id], this.communityCards)
 		})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
 
 		let previousPlayer = null;
@@ -876,20 +864,13 @@ class Table {
 
 	act(playerId, action) {
 		if(!playerId && action.type === Action.Type.ROUND_START) this.startRound();
+		if(!playerId && action.type === Action.Type.ROUND_NEXT) this.nextRound();
 		else if(!playerId && action.type === Action.Type.ROUND_END) this.endRound();
 		else {
 			const player = this.round.getPlayer(playerId);
 			if(!this.round) throw new Error('No round currently active');
 			this.round.act(player, action);
 		}
-	// 		// Round
-	// ROUND_START: 'ROUND_START',
-	// DEAL: 'DEAL',
-	// FLOP: 'FLOP',
-	// TURN: 'TURN',
-	// RIVER: 'RIVER',
-	// ROUND_END: 'ROUND_END'
-
 	}
 
 	tick() {
@@ -899,7 +880,15 @@ class Table {
 	}
 
 	startRound() {
-		_.each(this.players, player => player.clearCards());
+		this.round = new Round(this.players, {
+			ante: this.ante,
+			blinds: this.blinds
+		});
+	}
+
+	nextRound() {
+		const lastPlayer = this.players.shift();
+		this.players.push(lastPlayer);
 		this.round = new Round(this.players, {
 			ante: this.ante,
 			blinds: this.blinds

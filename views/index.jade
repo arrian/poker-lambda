@@ -45,8 +45,8 @@ block content
         cardOverlap(index) {
           return `grid-area: 1 / ${index + 1} / span 1 / span 5`;
         },
-        playerOpacity(player) {
-          return `opacity: ${this.table.round.actions[player.id] === 'FOLD' ? 0.5 : 1 }`;
+        playerStyle(player) {
+          return `opacity: ${this.table.round.actions[player.id] === 'FOLD' ? 0.5 : 1 }; outline: ${this.actingPlayer?.id === player.id ? '5px solid white' : 'none' };`;
         },
         getPlayer(id) {
           return this.table.players.find(player => player.id === id);
@@ -115,14 +115,14 @@ block content
           </div>
         </div>
       </div>
-      <div class="player" v-if="table && table.players" v-for="player in table.players" :style="playerOpacity(player)">
+      <div class="player" v-if="table && table.players" v-for="player in table.players" :style="playerStyle(player)">
         <h2>{{ player.name }}</h2>
         <div class="button" v-if="table.round.button === player.id">Dealer</div>
         <div>\${{ player.worth }}</div>
         <div>Action {{table.round.actions[player.id]}}</div>
         <div>Bet {{table.round.bets[player.id]}}</div>
         <div class="deck-short">
-          <div v-for="(card, index) in player.hand.cards" class="card" :style="cardOverlap(index)">
+          <div v-for="(card, index) in table.round.cards[player.id].cards" class="card" :style="cardOverlap(index)">
             <div class="front" :style="cardUrl(card)"></div>
             <div class="back"></div>
           </div>
