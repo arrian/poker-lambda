@@ -75,6 +75,7 @@ block content
         <h2>Table</h2>
         <div>{{ table.round.progress }}</div>
         <button @click="sendAction(null, 'ROUND_START')">Start Round</button>
+        <button @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
         <button @click="sendAction(null, 'ROUND_END')">End Round</button>
         <div>Pot \${{table.pot}}</div>
         <div>Bet \${{table.bet}}</div>

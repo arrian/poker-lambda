@@ -1,22 +1,58 @@
+import { Card, Suits, Values, Suit, Value, Cards, SuitName, ValueName } from './cards';
 const _ = require('lodash');
 const cuid = require('cuid');
 const colors = require('colors');
-const { Card, Suits, Values, Suit, Value, Cards } = require('./cards');
 
 const DEAL_SIZE = 2;
 const HAND_SIZE = 5;
 const ACTION_TIME_LIMIT = 1000;
 const MAX_PLAYERS = 8;
 
+type PlayerId = string;
+
+const sortByProperty = <T>(getTextProperty: (object: T) => number) => (objectA: T, objectB: T) => {
+    const propA = getTextProperty(objectA);
+    const propB = getTextProperty(objectB);
+    if (propA < propB) {
+        return -1;
+    }
+    if (propA > propB) {
+        return 1;
+    }
+    return 0;
+};
+
+interface HandIsResult {
+	hand: Card[] | null;
+	kickers: Card[] | null;
+}
+
+interface HandType {
+	rank: number;
+	name: string;
+	is: (cards: Cards) => HandIsResult
+}
+
 class Hand {
-	constructor(cards, communityCards) {
+	cards: Cards
+	communityCards: Cards
+	type: HandType | null
+	hand: Card[] | null
+	kickers: Card[] | null
+
+	static Type: Record<string, HandType>
+
+	constructor(cards: Cards, communityCards: Cards) {
 		this.cards = cards;
 		this.communityCards = communityCards;
+		this.type = null;
+		this.hand = null;
+		this.kickers = null;
 
 		var allCards = cards.getCombined(communityCards),
-			handTypes = _.reverse(_.sortBy(_.values(Hand.Type), 'rank'));
+			handTypes = Object.values(Hand.Type).sort(sortByProperty(type => type.rank)).reverse();
 
-		_.some(handTypes, (type, key) => {
+		handTypes.some(type => {
 			let { hand, kickers } = type.is(allCards);
 			if(hand) {
 				this.type = type;
@@ -27,8 +63,12 @@ class Hand {
 		});
 	}
 
-	static compare(leftHand, rightHand) {
-		if(leftHand.type.rank === rightHand.type.rank) {
+	getRank() {
+		return this.type?.rank || -1;
+	}
+
+	static compare(leftHand: Hand, rightHand: Hand) {
+		if(leftHand.type?.rank === rightHand.type?.rank) {
 			let handRank = Cards.compare(new Cards(leftHand.hand), new Cards(rightHand.hand));
 			if(handRank === 0) {
 				let kickerRank = Cards.compare(new Cards(leftHand.kickers), new Cards(rightHand.kickers));
@@ -36,7 +76,7 @@ class Hand {
 			}
 			return handRank;
 		}
-		return leftHand.type.rank - rightHand.type.rank;
+		return leftHand.getRank() - rightHand.getRank();
 	}
 }
 
@@ -45,7 +85,7 @@ Hand.Type = {
 		rank: 10,
 		name: 'Royal Flush',
 		is: function(cards) {
-			var royalFlush = _.find(cards.getGroupedBySuit(), function(suitGroup) {
+			var royalFlush = cards.getGroupedBySuit().find(suitGroup => {
 				var straight = suitGroup.getStraight(HAND_SIZE);
 				return straight && straight.containsValue(Value.Ace) && straight.containsValue(Value.King);
 			});
@@ -60,7 +100,7 @@ Hand.Type = {
 		rank: 9,
 		name: 'Straight Flush',
 		is: function(cards) {
-			var straightFlush = _.find(cards.getGroupedBySuit(), suitGroup=> suitGroup.getStraight(HAND_SIZE));
+			var straightFlush = cards.getGroupedBySuit().find(suitGroup => suitGroup.getStraight(HAND_SIZE));
 
 			return {
 				hand: straightFlush ? straightFlush.getCards() : null,
@@ -72,7 +112,8 @@ Hand.Type = {
 		rank: 8,
 		name: 'Four of a Kind',
 		is: function(cards) {
-			var four = _.find(cards.getGroupedByValue(), valueGroup=> valueGroup.count() === 4);
+			var four = cards.getGroupedByValue().find(valueGroup => valueGroup.count() === 4);
+
 			return {
 				hand: four ? four.getCards() : null,
 				kickers: [ cards.getRelativeComplement(four).getHighestCard() ]
@@ -84,8 +125,8 @@ Hand.Type = {
 		name: 'Full House',
 		is: function(cards) {
 			var handByValues = cards.getGroupedByValue(),
-				triple = _.find(handByValues, valueGroup=> valueGroup.count() === 3), // three of a kind in the full house
-				double = _.find(handByValues, valueGroup=> valueGroup.count() === 2); // two pair in the full house
+				triple = handByValues.find(valueGroup => valueGroup.count() === 3), // three of a kind in the full house
+				double = handByValues.find(valueGroup => valueGroup.count() === 2); // two pair in the full house
 
 			return {
 				hand: triple && double ? [ ...triple.getCards(), ...double.getCards()] : null,
@@ -97,7 +138,7 @@ Hand.Type = {
 		rank: 6,
 		name: 'Flush',
 		is: function(cards) {
-			const flush = _.find(cards.getGroupedBySuit(), suitGroup=> suitGroup.count() === HAND_SIZE);
+			const flush = cards.getGroupedBySuit().find(suitGroup => suitGroup.count() === HAND_SIZE);
 			return {
 				hand: flush ? flush.getCards() : null,
 				kickers: null
@@ -119,9 +160,9 @@ Hand.Type = {
 		rank: 4,
 		name: 'Three of a Kind',
 		is: function(cards) {
-			var three = _.find(cards.getGroupedByValue(), valueGroup=> valueGroup.count() === 3);
+			var three = cards.getGroupedByValue().find(valueGroup => valueGroup.count() === 3);
 			return {
-				hand: three ? three.getSorted() : null,
+				hand: three ? three.getSorted().getCards() : null,
 				kickers: cards.getRelativeComplement(three).getHighestCards(2)
 			};
 		}
@@ -130,13 +171,11 @@ Hand.Type = {
 		rank: 3,
 		name: 'Two Pair',
 		is: function(cards) {
-			var pairs = _.filter(cards.getGroupedByValue(), valueGroup=> valueGroup.count() === 2);
+			var pairs = cards.getGroupedByValue().filter(valueGroup => valueGroup.count() === 2);
 			var twoPairs = pairs.length >= 2 ? new Cards([...pairs[0].getCards(), ...pairs[1].getCards()]) : null;
 
-			console.log('two pair', pairs, twoPairs, cards.getRelativeComplement(twoPairs), cards.getRelativeComplement(twoPairs).getHighestCard());
-
 			return {
-				hand: twoPairs ? twoPairs.getSorted() : null,
+				hand: twoPairs ? twoPairs.getSorted().getCards() : null,
 				kickers: [ cards.getRelativeComplement(twoPairs).getHighestCard() ]
 			};
 		}
@@ -145,8 +184,7 @@ Hand.Type = {
 		rank: 2,
 		name: 'Pair',
 		is: function(cards) {
-			var pair = _.find(cards.getGroupedByValue(), valueGroup=> valueGroup.count() === 2);
-			console.log('pair', pair, cards.getRelativeComplement(pair), cards.getRelativeComplement(pair).getHighestCards(3));
+			var pair = cards.getGroupedByValue().find(valueGroup => valueGroup.count() === 2);
 
 			return {
 				hand: pair ? pair.getCards() : null,
@@ -167,7 +205,11 @@ Hand.Type = {
 };
 
 class Player {
-	constructor(name) {
+	id: string
+	name: string
+	worth: number
+
+	constructor(name: string) {
 		this.id = cuid();
 		this.name = name;
 
@@ -179,8 +221,18 @@ class Player {
 	}
 }
 
+interface ActionData {
+	value?: number | null | undefined
+	source?: string
+}
+
 class Action {
-	constructor(type, data) {
+	type: string
+	data: ActionData | null | undefined
+
+	static Type: Record<string, string>
+
+	constructor(type:string, data?:ActionData) {
 		this.type = type;
 		this.data = data;
 	}
@@ -210,14 +262,62 @@ Action.Type = {
 	ROUND_END: 'ROUND_END'
 };
 
+interface RuleBlind {
+	value: number
+	name: string
+}
+
+interface Rules {
+	ante: number;
+	blinds: RuleBlind[]
+}
+
+interface Pot {
+
+}
+
+interface LogItem {
+	state: RoundState
+	player: Player | null
+	action: Action
+	time: string
+	step: number
+}
+
+interface PlayerResult {
+	id: string
+	hand: Hand
+	rank?: number
+}
+
+type RoundState = string;
+
 class Round {
-	constructor(players, rules) {
+	id: string
+	communityCards: Cards
+	deck: Cards
+	players: Player[]
+	button: PlayerId | null
+	actingPlayer: PlayerId | null
+	acted: Record<PlayerId, boolean>
+	actions: Record<PlayerId, string>
+	bets: Record<PlayerId, number>
+	cards: Record<PlayerId, Cards>
+	rules: Rules
+	pots: Array<Pot>
+	log: Array<LogItem>
+	progress: RoundState
+	results: PlayerResult[] | null
+
+	static State: Record<string, RoundState>
+
+	constructor(players: Player[], rules: Rules) {
 		if(players.length <= 0) throw new Error('Can\'t start a round with no players');
 
 		this.id = cuid();
 
 		this.communityCards = new Cards();
-		this.deck = null;
+		this.deck = new Cards();
 
 		this.players = [...players];
 		this.button = players[0].id;
@@ -234,10 +334,10 @@ class Round {
 
 		this.log = [];
 
+		this.results = null;
+
 		this.progress = Round.State.STARTING;
-		this.record(null, {
-			type: 'START'
-		});
+		this.record(null, new Action(Action.Type.STARTED));
 
 		this.deal();
 		this.preflop();
@@ -247,8 +347,6 @@ class Round {
 		if(this.progress === Round.State.ENDED) {
 			return;
 		}
-
-		console.log('awaiting action', this.isAwaitingAction());
 		
 		if(this.players.length <= 1) {
 			this.end();
@@ -287,15 +385,16 @@ class Round {
 
 	isBetSizeEqual() {
 		const bet = this.getBetSize();
-		console.log(bet, 'isBetSizeEqual', this.players.every(player => this.bets[player.id] === bet || this.isPlayerAllIn(player)));
 		return this.players.every(player => this.bets[player.id] === bet || this.isPlayerAllIn(player));
 	}
 
-	record(player, action) {
-		this.log.push({ state: this.progress, player: player, action: action, time: Date.now(), step: this.log.length });
+	record(player: Player | null, action: Action) {
+		const time = (new Date()).toISOString();
+		this.log.push({ state: this.progress, player: player, action: action, time: time, step: this.log.length });
+		console.log(`${colors.magenta(time)}: ${ player ? `${player.name}` : `dealer`} ${colors.green.bold(action.type)} (${this.communityCards.count() ? `table: ${this.communityCards.toString()}, ` : ''}players: ${this.players.map(player => `${player.name} ${this.cards[player.id]?.toString()}`).join(', ')}${colors.bgBlack.white(`)`)}`);
 	}
 
-	act(player, action) {
+	act(player: Player, action: Action) {
 		if(player.id !== this.actingPlayer) {
 			throw new Error('Player acted out of turn');
 		}
@@ -313,12 +412,12 @@ class Round {
 		}
 	}
 
-	dead(player) {
+	dead(player: Player) {
 		this.record(player, new Action(Action.Type.DEAD));
 		this.removePlayer(player);
 	}
 
-	fold(player, action) {
+	fold(player: Player, action: Action) {
 		this.record(player, action);
 		this.actions[player.id] = Action.Type.FOLD;
 		this.dead(player);
@@ -328,25 +427,24 @@ class Round {
 		}
 	}
 
-	check(player, action) {
+	check(player: Player, action: Action) {
 		if(this.bets[player.id] !== this.getBetSize()) throw new Error('Check can only be called if the player bet is the same as the highest bet.');
 		this.record(player, action);
 		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.CHECK;
 	}
 
-	bet(player, action) {
-		if(action.data.value <= 0) throw new Error('A bet > 0 was expected');
+	bet(player: Player, action: Action) {
+		if(!action || !action.data || !action.data.value || action.data.value <= 0) throw new Error('A bet > 0 was expected');
 		if(this.getBetSize()) throw new Error('Can\'t bet after a bet. Call or raise was expected.');
 		this.record(player, action);
-		console.log(this.log, player, action);
 		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.BET;
-		this.bets[player.id] = action.data.value;
+		this.bets[player.id] = action.data?.value;
 	}
 
-	raise(player, action) {
-		if(action.data.value <= this.getBetSize()) throw new Error('A raise larger than the current bet was expected.');
+	raise(player: Player, action: Action) {
+		if(!action || !action.data || !action.data.value || action.data.value <= this.getBetSize()) throw new Error('A raise larger than the current bet was expected.');
 		this.record(player, action);
 		this.acted = {};
 		this.acted[player.id] = true;
@@ -354,16 +452,16 @@ class Round {
 		this.bets[player.id] = action.data.value;
 	}
 
-	call(player, action) {
-		if(action.data.value !== this.getBetSize()) throw new Error('A call must be the size of the current bet.');
+	call(player: Player, action: Action) {
+		if(!action || !action.data || !action.data.value || action.data.value !== this.getBetSize()) throw new Error('A call must be the size of the current bet.');
 		this.record(player, action);
 		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.CALL;
 		this.bets[player.id] = action.data.value;
 	}
 
-	allIn(player, action) {
-		if(action.data.value !== player.worth) throw new Error('All in must be of the size of the player worth');// fix this, depend on size of other all ins
+	allIn(player: Player, action: Action) {
+		if(!action || !action.data || !action.data.value || action.data.value !== player.worth) throw new Error('All in must be of the size of the player worth');// fix this, depend on size of other all ins
 		this.record(player, action);
 		this.acted[player.id] = true;
 		this.actions[player.id] = Action.Type.ALL_IN;
@@ -380,31 +478,39 @@ class Round {
 		this.cards = {};
 		this.players.forEach(player => this.cards[player.id] = new Cards());
 		for(var i = 0; i < DEAL_SIZE; i++) {
-			this.players.forEach(player => this.cards[player.id].add(this.deck.draw()));
+			this.players.forEach(player => {
+				const drawnCard = this.deck.draw();
+				if(drawnCard) {
+					this.cards[player.id].add(drawnCard);
+				} else {
+					throw new Error('Failed to draw a card from the deck while dealing');
+				}
+			});
 		}
 
 		this.progress = Round.State.DEALT;
-		this.record(null, {
-			type: Action.Type.DEAL
-		});
+		this.record(null, new Action(Action.Type.DEAL));
 	}
 
 	preflop() {
 		if(this.rules && this.rules.blinds) {
 			this.rules.blinds.forEach((blind, index) => {
-				if(index === 0) {
-					this.bet(this.getActingPlayer(), {
+				const actingPlayer = this.getActingPlayer();
+				if(!actingPlayer) {
+					throw new Error('Failed to get acting player on the preflop');
+				} else if(index === 0) {
+					this.bet(actingPlayer, {
 						type: Action.Type.BET,
 						data: {
-							reason: 'Blind',
+							source: 'Blind',
 							value: blind.value
 						}
 					});
 				} else {
-					this.raise(this.getActingPlayer(), {
+					this.raise(actingPlayer, {
 						type: Action.Type.RAISE,
 						data: {
-							reason: 'Blind',
+							source: 'Blind',
 							value: blind.value
 						}
 					});
@@ -417,45 +523,54 @@ class Round {
 	flop() {
 		if(this.progress !== Round.State.DEALT) throw new Error(`Expected ${Round.State.DEALT} instead of ${this.progress}`);
 
-		this.communityCards.add(this.deck.draw());
-		this.communityCards.add(this.deck.draw());
-		this.communityCards.add(this.deck.draw());
+		for(let i = 0; i < 3; i++) {
+			const drawnCard = this.deck.draw();
+			if(drawnCard) {
+				this.communityCards.add(drawnCard);
+			} else {
+				throw new Error(`Failed to draw card ${i + 1} of 3 on flop`);
+			}
+		}
 
 		this.actingPlayer = this.getNextPlayer(this.button).id;
 		this.acted = {};
 
 		this.progress = Round.State.FLOPPED;
-		this.record(null, {
-			type: Action.Type.FLOP
-		});
+		this.record(null, new Action(Action.Type.FLOP));
 	}
 
 	turn() {
 		if(this.progress !== Round.State.FLOPPED) throw new Error(`Expected ${Round.State.FLOPPED} instead of ${this.progress}`);
 
-		this.communityCards.add(this.deck.draw());
+		const drawnCard = this.deck.draw();
+		if(drawnCard) {
+			this.communityCards.add(drawnCard);
+		} else {
+			throw new Error('Failed to draw card on turn.');
+		}
 
 		this.actingPlayer = this.getNextPlayer(this.button).id;
 		this.acted = {};
 
 		this.progress = Round.State.TURNED;
-		this.record(null, {
-			type: Action.Type.TURN
-		});
+		this.record(null, new Action(Action.Type.TURN));
 	}
 
 	river() {
 		if(this.progress !== Round.State.TURNED) throw new Error(`Expected ${Round.State.TURNED} instead of ${this.progress}`);
 
-		this.communityCards.add(this.deck.draw());
+		const drawnCard = this.deck.draw();
+		if(drawnCard) {
+			this.communityCards.add(drawnCard);
+		} else {
+			throw new Error('Failed to draw card on river.');
+		}
 
 		this.actingPlayer = this.getNextPlayer(this.button).id;
 		this.acted = {};
 
 		this.progress = Round.State.RIVERED;
-		this.record(null, {
-			type: Action.Type.RIVER
-		});
+		this.record(null, new Action(Action.Type.RIVER));
 	}
 
 	end() {
@@ -467,28 +582,11 @@ class Round {
 
 		this.progress = Round.State.ENDED;
 
-		this.record(null, {
-			type: Action.Type.ROUND_END
-		});
+		this.record(null, new Action(Action.Type.ROUND_END));
 	}
 
 	hasEnded() {
 		return this.progress === Round.State.ENDED;
-	}
-
-	getFlopCards() {
-		if(this.progress !== Round.State.FLOPPED) throw new Error(`Expected ${Round.State.FLOPPED} instead of ${this.progress}`);
-		return [this.communityCards[0], this.communityCards[1], this.communityCards[2]];
-	}
-
-	getTurnCard() {
-		if(this.progress !== Round.State.TURNED) throw new Error(`Expected ${Round.State.TURNED} instead of ${this.progress}`);
-		return this.communityCards[3];
-	}
-
-	getRiverCard() {
-		if(this.progress !== Round.State.RIVERED) throw new Error(`Expected ${Round.State.RIVERED} instead of ${this.progress}`);
-		return this.communityCards[4];
 	}
 
 	getPots() {
@@ -503,7 +601,7 @@ class Round {
 		if(this.players.length === 0) return null;
 		var ranked = this.rankPlayers(),
 			winner = ranked[0], // we know this is a winner
-			winners = _.filter(ranked, rank => Hand.compare(winner.hand, rank.hand) === 0); // find all winners
+			winners = ranked.filter(rank => Hand.compare(winner.hand, rank.hand) === 0); // find all winners
 
 		return winners;
 	}
@@ -518,16 +616,17 @@ class Round {
 		return Object.values(this.bets).reduce((result, bet) => result + bet, 0);
 	}
 
-	getPlayer(id) {
+	getPlayer(id: PlayerId) {
 		return this.players.find(player => player.id === id);
 	}
 
-	getNextPlayer(id) {
+	getNextPlayer(id: PlayerId | null) {
+		if(!id) {
+			throw new Error('Failed to get next player. Player id provided was null.');
+		}
 		const currentIndex = this.players.findIndex(player => player.id === id);
-		console.log('getNextPlayer current', currentIndex);
 		if(currentIndex < 0) throw new Error('Could not find player with id ' + id);
 		const nextIndex = (currentIndex + 1) >= this.players.length ? 0 : currentIndex + 1;
-		console.log('getNextPlayer next', nextIndex);
 		return this.players[nextIndex];
 	}
 
@@ -536,24 +635,24 @@ class Round {
 		return this.getPlayer(this.actingPlayer);
 	}
 
-	isPlayerAllIn(player) {
+	isPlayerAllIn(player: Player) {
 		return this.bets[player.id] === player.worth;
 	}
 
-	rankPlayers() {
-		const players = this.players.map(player => ({
+	rankPlayers() : PlayerResult[] {
+		const players : PlayerResult[] = this.players.map(player => ({
 			id: player.id,
 			hand: new Hand(this.cards[player.id], this.communityCards)
 		})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
 
-		let previousPlayer = null;
+		let previousPlayer: PlayerResult | null = null;
 		players.forEach(player => {
 			if(!previousPlayer) {
 				player.rank = 1;
 			} else if(Hand.compare(player.hand, previousPlayer.hand) === 0) {
 				player.rank = previousPlayer.rank;
 			} else {
-				player.rank = previousPlayer.rank + 1;
+				player.rank = previousPlayer.rank ? previousPlayer.rank + 1 : 1;
 			}
 			previousPlayer = player;
 		});
@@ -561,11 +660,11 @@ class Round {
 		return players;
 	}
 
-	removePlayer(player) {
+	removePlayer(player : Player) {
 		if(this.actingPlayer === player.id) {
 			this.nextPlayer();
 		}
-		_.remove(this.players, p => p.id === player.id);
+		this.players = this.players.filter(p => p.id !== player.id);
 	}
 
 }
@@ -580,30 +679,38 @@ Round.State = {
 };
 
 class Table {
-	constructor(name) {
+	id: string
+	name: string
+	players: Player[]
+	round: Round | null
+	rules: Rules
+
+	constructor(name: string) {
 		this.id = cuid();
 		this.name = name;
 		this.players = [];
 		this.round = null;
 
-		// Rules
-		this.ante = 10;
-		this.blinds = [{
-			name: 'Small blind',
-			value: 20
-		}, {
-			name: 'Big blind',
-			value: 40
-		}];
+		this.rules = {
+			ante: 10,
+			blinds: [{
+				name: 'Small blind',
+				value: 20
+			}, {
+				name: 'Big blind',
+				value: 40
+			}]
+		};
 	}
 
-	act(playerId, action) {
+	act(playerId: PlayerId, action: Action) {
 		if(!playerId && action.type === Action.Type.ROUND_START) this.startRound();
 		if(!playerId && action.type === Action.Type.ROUND_NEXT) this.nextRound();
 		else if(!playerId && action.type === Action.Type.ROUND_END) this.endRound();
 		else {
-			const player = this.round.getPlayer(playerId);
 			if(!this.round) throw new Error('No round currently active');
+			const player = this.round.getPlayer(playerId);
+			if(!player) throw new Error(`Player with id ${playerId} could not be found while attempting to act.`);
 			this.round.act(player, action);
 		}
 	}
@@ -615,22 +722,18 @@ class Table {
 	}
 
 	startRound() {
-		this.round = new Round(this.players, {
-			ante: this.ante,
-			blinds: this.blinds
-		});
+		this.round = new Round(this.players, this.rules);
 	}
 
 	nextRound() {
 		const lastPlayer = this.players.shift();
+		if(!lastPlayer) throw new Error('Failed to shift player order while proceeding to next round.');
 		this.players.push(lastPlayer);
-		this.round = new Round(this.players, {
-			ante: this.ante,
-			blinds: this.blinds
-		});
+		this.round = new Round(this.players, this.rules);
 	}
 
 	endRound() {
+		if(!this.round) throw new Error('Attempted to end a round but no round exists.');
 		this.round.end();
 	}
 
@@ -640,6 +743,7 @@ class Table {
 	}
 
 	getRoundWinners() {
+		if(!this.round) throw new Error('Attempted to get round winners but no round exists.');
 		return this.round.getWinners();
 	}
 
@@ -647,13 +751,13 @@ class Table {
 
 	}
 
-	join(player) {
+	join(player: Player) {
 		if(this.players.length >= MAX_PLAYERS) throw new Error('Player can\'t join. The table is full');
 		this.players.push(player);
 	}
 
-	leave(player) {
-		var removed = _.remove(this.players, p => player.id === p.id);
+	leave(player: Player) {
+		var removed = _.remove(this.players, (p: Player) => player.id === p.id);
 		if(removed.length < 1) throw new Error('Could not find the player to remove');
 		else if(removed.length > 1) throw new Error('Found more than one of the player to remove');
 	}
@@ -664,42 +768,47 @@ class Table {
 	}
 
 	log() {
-		_.each(this.players, player=>player.log());
+		this.players.forEach(player => player.log());
 		if(this.round) console.log(`Table: ${this.round.communityCards.getSorted().toString()}`);
 	}
 
 	logRanked() {
+		if(!this.round) throw new Error('Attempted to log ranked players but no round exists.');
 		console.log('--Ranked');
 		var ranked = this.round.rankPlayers();
-		_.each(ranked, rank => {
-			console.log(`${rank.player.name} (${rank.hand.type.name})`);
+		ranked.forEach(rank => {
+			console.log(`${rank.id} is rank ${rank.rank}`);
 		});
 	}
 
 	logWinners() {
 		console.log('--Winners');
 		var winners = this.getRoundWinners();
-		_.each(winners, rank => {
-			console.log(`${rank.player.name} (${rank.hand.type.name} ${new Cards(rank.hand.hand).toString()})`);
+		(winners || []).forEach(rank => {
+			console.log(`${rank.id} (${rank.hand?.type?.name} ${new Cards(rank.hand.hand).toString()})`);
 		});
 	}
 }
 
 class Casino {
-	constructor(name) {
+	name: string
+	tables: Table[]
+	players: Player[]
+
+	constructor(name: string) {
 		this.name = name;
 		this.tables = [];
 		this.players = [];
 
 	}
 
-	createTable(name) {
+	createTable(name: string) {
 		const table = new Table(name);
 		this.tables.push(table);
 		return table;
 	}
 
-	createPlayer(name) {
+	createPlayer(name: string) {
 		const player = new Player(name);
 		this.players.push(player);
 		return player;
@@ -715,5 +824,7 @@ module.exports = {
 	Action,
 	Player,
 	Round,
-	Table
+	Table,
+	SuitName,
+	ValueName
 };

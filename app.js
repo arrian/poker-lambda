@@ -4,8 +4,9 @@ var bodyParser = require('body-parser');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
+const colors = require('colors');
 
-var { Table, Player, Cards, Action } = require('./cribbage');
+var { Table, Player, Cards, Action, ValueName, SuitName } = require('./poker');
 
 var table = new Table('test');
 var player1 = new Player('player 1');
@@ -63,25 +64,25 @@ app.get('/status', function(req, res) {
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify({
     ...table,
-    ValueName: Cards.ValueName,
-    SuitName: Cards.SuitName,
+    ValueName: ValueName,
+    SuitName: SuitName,
     pot: table.round?.getPotSize(),
     bet: table.round?.getBetSize()
   }));
 });
 
 app.post('/action', function(req, res) {
-  console.log(req.body);
-
   if(req.body.player === table.round?.actingPlayer || !req.body.player) {
     table.act(req.body.player, {
       type: req.body.action,
       data: req.body.data
     });
+    res.sendStatus(200);
   } else {
-    console.error('Action played out of turn');
+    console.error(colors.red.bold('Action played out of turn'));
+    res.sendStatus(400);
   }
-  res.sendStatus(200);
+  
 });
 
 // catch 404 and forward to error handler
@@ -96,7 +97,7 @@ app.use(function(err, req, res, next) {
   res.locals.error = req.app.get('env') === 'development' ? err : {};
   res.locals.title = 'Server Error';
 
-  console.error(err.message);
+  console.error(colors.red.bold(err.message));
 
   // render the error page
   res.status(err.status || 500);
