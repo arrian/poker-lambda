@@ -98,6 +98,7 @@ app.use(function(err, req, res, next) {
   res.locals.title = 'Server Error';
 
   console.error(colors.red.bold(err.message));
+  console.error(colors.red.bold(err.stack));
 
   // render the error page
   res.status(err.status || 500);

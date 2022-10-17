@@ -10,19 +10,7 @@ const MAX_PLAYERS = 8;
 
 type PlayerId = string;
 
-const sortByProperty = <T>(getTextProperty: (object: T) => number) => (objectA: T, objectB: T) => {
-    const propA = getTextProperty(objectA);
-    const propB = getTextProperty(objectB);
-    if (propA < propB) {
-        return -1;
-    }
-    if (propA > propB) {
-        return 1;
-    }
-    return 0;
-};
-
-interface HandIsResult {
+interface HandMatcher {
 	hand: Card[] | null;
 	kickers: Card[] | null;
 }
@@ -30,7 +18,7 @@ interface HandIsResult {
 interface HandType {
 	rank: number;
 	name: string;
-	is: (cards: Cards) => HandIsResult
+	is: (cards: Cards) => HandMatcher
 }
 
 class Hand {
@@ -50,7 +38,7 @@ class Hand {
 		this.kickers = null;
 
 		var allCards = cards.getCombined(communityCards),
-			handTypes = Object.values(Hand.Type).sort(sortByProperty(type => type.rank)).reverse();
+			handTypes = Object.values(Hand.Type).sort((a, b) => a.rank - b.rank).reverse();
 
 		handTypes.some(type => {
 			let { hand, kickers } = type.is(allCards);
@@ -226,8 +214,10 @@ interface ActionData {
 	source?: string
 }
 
+type ActionType = string;
+
 class Action {
-	type: string
+	type: ActionType
 	data: ActionData | null | undefined
 
 	static Type: Record<string, string>
@@ -290,6 +280,16 @@ interface PlayerResult {
 	rank?: number
 }
 
+// Round specific player data
+interface PlayerData {
+	order: number,
+	player: PlayerId,
+	acted: boolean,
+	action: ActionType | null,
+	bet: number,
+	cards: Cards
+}
+
 type RoundState = string;
 
 class Round {
@@ -297,12 +297,9 @@ class Round {
 	communityCards: Cards
 	deck: Cards
 	players: Player[]
+	playersData: Record<PlayerId, PlayerData>
 	button: PlayerId | null
-	actingPlayer: PlayerId | null
-	acted: Record<PlayerId, boolean>
-	actions: Record<PlayerId, string>
-	bets: Record<PlayerId, number>
-	cards: Record<PlayerId, Cards>
+	actingPlayer?: PlayerId | null
 	rules: Rules
 	pots: Array<Pot>
 	log: Array<LogItem>
@@ -320,14 +317,20 @@ class Round {
 		this.deck = new Cards();
 
 		this.players = [...players];
+		this.playersData = {};
+		players.forEach((player, index) => {
+			this.playersData[player.id] = {
+				order: index,
+				player: player.id,
+				acted: false,
+				action: null,
+				bet: 0,
+				cards: new Cards()
+			};
+		});
 		this.button = players[0].id;
-		this.actingPlayer = this.getNextPlayer(this.button).id;
-		
-		this.acted = {}; // TODO: to avoid errors it might be worth basing this on transactional data
-		this.actions = {};
-		this.bets = {};
-		this.cards = {};
-		
+		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+
 		this.rules = rules;
 		
 		this.pots = [];
@@ -343,15 +346,15 @@ class Round {
 		this.preflop();
 	}
 
-	nextState() {
+	nextState(nextPlayer?: Player | null) {
 		if(this.progress === Round.State.ENDED) {
 			return;
 		}
 		
-		if(this.players.length <= 1) {
+		if(this.players.length < 2) {
 			this.end();
-		} else if(this.isAwaitingAction()) {
-			this.nextPlayer();
+		} else if(this.isAwaitingAction() && nextPlayer) {
+			this.actingPlayer = nextPlayer.id;
 		} else if(this.progress === Round.State.DEALT) {
 			this.flop();
 		} else if(this.progress === Round.State.FLOPPED) {
@@ -368,36 +371,42 @@ class Round {
 			this.actingPlayer = null;
 			this.end();
 		} else {
-			this.actingPlayer = this.getNextPlayer(this.actingPlayer).id;
+			this.actingPlayer = this.getNextPlayer(this.actingPlayer)?.id;
 		}
 	}
 
 	isAwaitingAction() {
+		if(this.players.length <= 1) {
+			return false;
+		}
+
 		if(this.progress === Round.State.ENDED) {
 			return false;
 		}
 
 		// All players must have acted since the last raise
-		const allActed = this.players.every(player => this.acted[player.id] || this.isPlayerAllIn(player));
+		const allActed = this.players.every(player => this.playersData[player.id].acted || this.isPlayerAllIn(player));
 
 		return !this.isBetSizeEqual() || !allActed;
 	}
 
 	isBetSizeEqual() {
 		const bet = this.getBetSize();
-		return this.players.every(player => this.bets[player.id] === bet || this.isPlayerAllIn(player));
+		return this.players.every(player => this.playersData[player.id].bet === bet || this.isPlayerAllIn(player));
 	}
 
 	record(player: Player | null, action: Action) {
 		const time = (new Date()).toISOString();
 		this.log.push({ state: this.progress, player: player, action: action, time: time, step: this.log.length });
-		console.log(`${colors.magenta(time)}: ${ player ? `${player.name}` : `dealer`} ${colors.green.bold(action.type)} (${this.communityCards.count() ? `table: ${this.communityCards.toString()}, ` : ''}players: ${this.players.map(player => `${player.name} ${this.cards[player.id]?.toString()}`).join(', ')}${colors.bgBlack.white(`)`)}`);
+		console.log(`${colors.magenta(time)}: ${ player ? `${player.name}` : `dealer`} ${colors.green.bold(action.type)} (${this.communityCards.count() ? `table: ${this.communityCards.toString()}, ` : ''}players: ${this.players.map(player => `${player.name} ${this.playersData[player.id].cards?.toString()}`).join(', ')}${colors.bgBlack.white(`)`)}`);
 	}
 
 	act(player: Player, action: Action) {
 		if(player.id !== this.actingPlayer) {
 			throw new Error('Player acted out of turn');
 		}
+
+		const nextPlayer = this.getNextPlayer(player.id);
 
 		if(action.type === Action.Type.FOLD) this.fold(player, action);
 		else if(action.type === Action.Type.CHECK) this.check(player, action);
@@ -408,7 +417,7 @@ class Round {
 		else throw new Error(`Invalid action ${action.type}`);
 		
 		if(this.progress !== Round.State.ENDED) {
-			this.nextState();
+			this.nextState(nextPlayer);
 		}
 	}
 
@@ -419,53 +428,49 @@ class Round {
 
 	fold(player: Player, action: Action) {
 		this.record(player, action);
-		this.actions[player.id] = Action.Type.FOLD;
+		this.playersData[player.id].action = Action.Type.FOLD;
 		this.dead(player);
-
-		if(this.players.length < 2) {
-			this.end();
-		}
 	}
 
 	check(player: Player, action: Action) {
-		if(this.bets[player.id] !== this.getBetSize()) throw new Error('Check can only be called if the player bet is the same as the highest bet.');
+		if(this.playersData[player.id].bet !== this.getBetSize()) throw new Error('Check can only be called if the player bet is the same as the highest bet.');
 		this.record(player, action);
-		this.acted[player.id] = true;
-		this.actions[player.id] = Action.Type.CHECK;
+		this.playersData[player.id].acted = true;
+		this.playersData[player.id].action = Action.Type.CHECK;
 	}
 
 	bet(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value <= 0) throw new Error('A bet > 0 was expected');
 		if(this.getBetSize()) throw new Error('Can\'t bet after a bet. Call or raise was expected.');
 		this.record(player, action);
-		this.acted[player.id] = true;
-		this.actions[player.id] = Action.Type.BET;
-		this.bets[player.id] = action.data?.value;
+		this.playersData[player.id].acted = true;
+		this.playersData[player.id].action = Action.Type.BET;
+		this.playersData[player.id].bet = action.data?.value;
 	}
 
 	raise(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value <= this.getBetSize()) throw new Error('A raise larger than the current bet was expected.');
 		this.record(player, action);
-		this.acted = {};
-		this.acted[player.id] = true;
-		this.actions[player.id] = Action.Type.RAISE;
-		this.bets[player.id] = action.data.value;
+		this.clearActedFlags();
+		this.playersData[player.id].acted = true;
+		this.playersData[player.id].action = Action.Type.RAISE;
+		this.playersData[player.id].bet = action.data.value;
 	}
 
 	call(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value !== this.getBetSize()) throw new Error('A call must be the size of the current bet.');
 		this.record(player, action);
-		this.acted[player.id] = true;
-		this.actions[player.id] = Action.Type.CALL;
-		this.bets[player.id] = action.data.value;
+		this.playersData[player.id].acted = true;
+		this.playersData[player.id].action = Action.Type.CALL;
+		this.playersData[player.id].bet = action.data.value;
 	}
 
 	allIn(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value !== player.worth) throw new Error('All in must be of the size of the player worth');// fix this, depend on size of other all ins
 		this.record(player, action);
-		this.acted[player.id] = true;
-		this.actions[player.id] = Action.Type.ALL_IN;
-		this.bets[player.id] = action.data.value;
+		this.playersData[player.id].acted = true;
+		this.playersData[player.id].action = Action.Type.ALL_IN;
+		this.playersData[player.id].bet = action.data.value;
 	}
 
 	deal() {
@@ -473,15 +478,17 @@ class Round {
 
 		this.deck = Cards.createDeck();
 		this.deck.shuffle();
-		this.acted = {};
+		
+		this.players.forEach(player => {
+			this.playersData[player.id].acted = false;
+			this.playersData[player.id].cards = new Cards();
+		});
 
-		this.cards = {};
-		this.players.forEach(player => this.cards[player.id] = new Cards());
 		for(var i = 0; i < DEAL_SIZE; i++) {
 			this.players.forEach(player => {
 				const drawnCard = this.deck.draw();
 				if(drawnCard) {
-					this.cards[player.id].add(drawnCard);
+					this.playersData[player.id].cards.add(drawnCard);
 				} else {
 					throw new Error('Failed to draw a card from the deck while dealing');
 				}
@@ -532,8 +539,8 @@ class Round {
 			}
 		}
 
-		this.actingPlayer = this.getNextPlayer(this.button).id;
-		this.acted = {};
+		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+		this.clearActedFlags();
 
 		this.progress = Round.State.FLOPPED;
 		this.record(null, new Action(Action.Type.FLOP));
@@ -549,8 +556,8 @@ class Round {
 			throw new Error('Failed to draw card on turn.');
 		}
 
-		this.actingPlayer = this.getNextPlayer(this.button).id;
-		this.acted = {};
+		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+		this.clearActedFlags();
 
 		this.progress = Round.State.TURNED;
 		this.record(null, new Action(Action.Type.TURN));
@@ -566,8 +573,8 @@ class Round {
 			throw new Error('Failed to draw card on river.');
 		}
 
-		this.actingPlayer = this.getNextPlayer(this.button).id;
-		this.acted = {};
+		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+		this.clearActedFlags();
 
 		this.progress = Round.State.RIVERED;
 		this.record(null, new Action(Action.Type.RIVER));
@@ -607,27 +614,33 @@ class Round {
 	}
 
 	getBetSize() {
-		const betValues = Object.values(this.bets);
+		const betValues = this.players.map(player => this.playersData[player.id].bet);
 		if(!betValues.length) return 0;
 		return Math.max(...betValues);
 	}
 
 	getPotSize() {
-		return Object.values(this.bets).reduce((result, bet) => result + bet, 0);
+		return Object.values(this.playersData).map(data => data.bet).reduce((result, bet) => result + bet, 0);
 	}
+
 
 	getPlayer(id: PlayerId) {
 		return this.players.find(player => player.id === id);
 	}
 
-	getNextPlayer(id: PlayerId | null) {
+	getNextPlayer(id?: PlayerId | null) {
+		// TODO: simplify
 		if(!id) {
 			throw new Error('Failed to get next player. Player id provided was null.');
 		}
-		const currentIndex = this.players.findIndex(player => player.id === id);
+		const orderedPlayers = Object.values(this.playersData).sort((a, b) => a.order - b.order).map(data => data.player);
+		const currentIndex = orderedPlayers.findIndex(playerId => playerId === id);
 		if(currentIndex < 0) throw new Error('Could not find player with id ' + id);
-		const nextIndex = (currentIndex + 1) >= this.players.length ? 0 : currentIndex + 1;
-		return this.players[nextIndex];
+		const activePlayers : Record<string, boolean> = {};
+		this.players.forEach(player => activePlayers[player.id] = true);
+		const nextPlayers = [...orderedPlayers.slice(currentIndex + 1), ...orderedPlayers.slice(0, currentIndex)].filter(player => activePlayers[player]);
+		if(nextPlayers.length < 1) throw new Error('Unable to move to next player. There are not enough players left.');
+		return this.getPlayer(nextPlayers[0]);
 	}
 
 	getActingPlayer() {
@@ -636,13 +649,13 @@ class Round {
 	}
 
 	isPlayerAllIn(player: Player) {
-		return this.bets[player.id] === player.worth;
+		return this.playersData[player.id].bet === player.worth;
 	}
 
 	rankPlayers() : PlayerResult[] {
 		const players : PlayerResult[] = this.players.map(player => ({
 			id: player.id,
-			hand: new Hand(this.cards[player.id], this.communityCards)
+			hand: new Hand(this.playersData[player.id].cards, this.communityCards)
 		})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
 
 		let previousPlayer: PlayerResult | null = null;
@@ -661,10 +674,11 @@ class Round {
 	}
 
 	removePlayer(player : Player) {
-		if(this.actingPlayer === player.id) {
-			this.nextPlayer();
-		}
 		this.players = this.players.filter(p => p.id !== player.id);
+	}
+
+	clearActedFlags() {
+		this.players.forEach(player => this.playersData[player.id].acted = false);
 	}
 
 }
@@ -677,6 +691,8 @@ Round.State = {
 	RIVERED: 'RIVERED',
 	ENDING: 'ENDING',
 };
+
+
 
 class Table {
 	id: string
@@ -788,6 +804,24 @@ class Table {
 			console.log(`${rank.id} (${rank.hand?.type?.name} ${new Cards(rank.hand.hand).toString()})`);
 		});
 	}
+}
+
+interface PlayerPartial {
+
+}
+
+// Partial knowledge round
+interface RoundPartial {
+
+}
+
+// Partial knowledge table 
+interface TablePartial {
+
+}
+
+function getPartialKnowledgeTable(player: Player, table: Table) {
+
 }
 
 class Casino {
