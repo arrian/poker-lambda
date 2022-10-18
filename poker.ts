@@ -806,22 +806,64 @@ class Table {
 	}
 }
 
-interface PlayerPartial {
-
-}
-
 // Partial knowledge round
 interface RoundPartial {
-
+	id: string
+	communityCards: Cards
+	deck: Cards
+	players: Player[]
+	playersData: Record<PlayerId, PlayerData>
+	button: PlayerId | null
+	actingPlayer?: PlayerId | null
+	rules: Rules
+	pots: Array<Pot>
+	log: Array<LogItem>
+	progress: RoundState
+	results: PlayerResult[] | null,
+	potSize: number,
+	betSize: number
 }
 
 // Partial knowledge table 
 interface TablePartial {
-
+	id: string
+	name: string
+	players: Player[]
+	round: RoundPartial | null
+	rules: Rules,
+	ValueName: Record<string, string>,
+	SuitName: Record<string, string>
 }
 
-function getPartialKnowledgeTable(player: Player, table: Table) {
+function getPartialKnowledgePlayersData(player : Player, playersData : Record<PlayerId, PlayerData>) {
+	const playersDataResult : Record<PlayerId, PlayerData> = {};
+	Object.entries(playersData).forEach(([key, value]) => {
+		console.log('entry', key, value);
+		if(!player || key === player.id) {
+			playersDataResult[key] = value;
+		} else {
+			playersDataResult[key] = {
+				...value,
+				cards: new Cards() // players shouldn't know other players hand
+			};
+		}
+	});
+	return playersDataResult;
+}
 
+function getPartialKnowledge(player: Player | null, table: Table) : TablePartial {
+	return {
+		...table,
+		round: table.round ? {
+			...table.round,
+			deck: player ? new Cards() : table.round.deck, // dealer deck is not known
+			playersData: player ? getPartialKnowledgePlayersData(player, table.round.playersData) : table.round.playersData,
+			potSize: table.round.getPotSize(),
+			betSize: table.round.getBetSize()
+		} : null,
+		ValueName,
+		SuitName
+	}
 }
 
 class Casino {
@@ -860,5 +902,6 @@ module.exports = {
 	Round,
 	Table,
 	SuitName,
-	ValueName
+	ValueName,
+	getPartialKnowledge
 };

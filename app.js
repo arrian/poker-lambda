@@ -6,7 +6,7 @@ var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 const colors = require('colors');
 
-var { Table, Player, Cards, Action, ValueName, SuitName } = require('./poker');
+var { Table, Player, Cards, Action, ValueName, SuitName, getPartialKnowledge } = require('./poker');
 
 var table = new Table('test');
 var player1 = new Player('player 1');
@@ -29,10 +29,6 @@ const { resourceLimits } = require('worker_threads');
 
 var app = express();
 
-
-// var cribbage;
-
-// view engine setup
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'jade');
 
@@ -46,29 +42,15 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/users', usersRouter);
 
 app.get('/', function(req, res, next) {
-  
   res.render('index', {
     title: 'Status',
-    id: table.id,
-    // name: table.name,
-    // players: table.players,
-    // playerStrings: table.players.map(player => `${player.name} ${player.hand.cards.map(card => `${card.value.short}${card.suit.short}`).join(', ')}`).join(', '),
-    // round: JSON.stringify(table.round),
-    // communityCards: table.round.communityCards.cards.map(card => `${card.value.short}${card.suit.short}`).join(', '),
-    // deck: table.round.deck.cards.map(card => `${card.value.short}${card.suit.short}`).join(', '),
-    // winners: table.winners
+    id: table.id
   });
 });
 
 app.get('/status', function(req, res) {
   res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify({
-    ...table,
-    ValueName: ValueName,
-    SuitName: SuitName,
-    pot: table.round?.getPotSize(),
-    bet: table.round?.getBetSize()
-  }));
+  res.end(JSON.stringify(getPartialKnowledge(req.query.player ? table.players[req.query.player] : null, table)));
 });
 
 app.post('/action', function(req, res) {

@@ -20,11 +20,11 @@ createApp({
     },
     methods: {
         async load() {
-            const result = await fetch('/status').then(response => response.json());
+            const result = await fetch('/status?player=3').then(response => response.json());
             this.table = result;
             this.tableString = JSON.stringify(result, null, 4);
             this.inputs = {};
-            this.table.players.forEach(player => this.inputs[player.id] = this.table.bet || 0);
+            this.table.players.forEach(player => this.inputs[player.id] = this.table.round?.betSize || 0);
             return result;
         },
         cardUrl(card) {
@@ -67,8 +67,8 @@ createApp({
     <button @click="sendAction(null, 'ROUND_START')">Start Round</button>
     <button @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
     <button @click="sendAction(null, 'ROUND_END')">End Round</button>
-    <div>Pot \${{table.pot}}</div>
-    <div>Bet \${{table.bet}}</div>
+    <div>Pot \${{table.round?.potSize}}</div>
+    <div>Bet \${{table.round?.betSize}}</div>
     <div class="actions">
         <div class="action" v-if="table && table.round" v-for="log in table.round.log">{{ log?.player?.name }} {{ log?.action?.type }} {{ log?.action?.data?.value }}</div>
     </div>
