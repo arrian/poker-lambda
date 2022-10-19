@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "start": "ts-node ./bin/www"
+    "start": "ts-node ./bin/www",
+    "debug": "node --inspect -r ts-node/register ./bin/www"
   },
   "dependencies": {
     "@types/node": "^18.11.0",

@@ -134,7 +134,6 @@
   display: flex;
   justify-content: center;
   padding: var(--space-8) 0;
-  overflow: hidden;
 }
 
 .community-cards-inner {
@@ -219,7 +218,7 @@
   height: var(--card-height);
   width: var(--card-width);
   transform-style: preserve-3d;
-  transition: transform 100ms ease-out, box-shadow 300ms ease-out;
+  transition: transform 1000ms ease-out, box-shadow 300ms ease-out;
   border-radius: 12px;
   box-shadow: 0px 0px 10px 10px rgba(0,0,0,0.1);
 }

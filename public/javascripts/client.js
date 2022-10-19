@@ -64,6 +64,14 @@ createApp({
         communityCards() {
             const cards = this.table?.round?.communityCards?.cards || [];
             return [...cards, ...Array(5 - cards.length).fill(null)];
+        },
+
+        results() {
+            // return this.table.results.map(result => ({
+            //     players: {
+            //         ...result.
+            //     }
+            // }));
         }
     },
     methods: {
@@ -188,7 +196,7 @@ createApp({
             <div class="details">
                 <div class="details-inner">
                     <div>{{ table.round?.progress }}</div>
-                    <div v-if="actingPlayer">Awaiting {{actingPlayer.name}}</div>
+                    <div v-if="actingPlayer">{{actingPlayer.name}} thinking...</div>
                     <div class="table-actions">
                         <button @click="sendAction(null, 'ROUND_START')">Start Round</button>
                         <button @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
@@ -199,10 +207,14 @@ createApp({
                         <div class="back"></div>
                     </div>
                     <div>
-                        <div v-if="table.round?.potSize" class="badge positive pot-size">Pot \${{table.round?.potSize}}</div>
+                        <div v-if="table.round?.potSize && !table.round?.results" class="badge warning pot-size">Pot \${{table.round?.potSize}}</div>
                     </div>
                     <div>
-                        <div v-if="table.round?.betSize" class="badge">Bet \${{table.round?.betSize}}</div>
+                        <div v-if="table.round?.betSize && !table.round?.results" class="badge">Bet \${{table.round?.betSize}}</div>
+                    </div>
+
+                    <div class="results" v-if="table.round && table.round.results" v-for="(pot, index) in table.round.results">
+                        <div class="badge warning">Pot \${{pot.total}}</div> <span v-for="([player, hand], index) in Object.entries(pot.participants)"><template v-if="index"> v </template><span class="badge" :class="{ positive: pot.winnings[player], negative: !pot.winnings[player] }">{{getPlayer(player)?.name}}<template v-if="pot.winnings[player]"> wins</template> with a {{hand.type.name.toLowerCase()}}</span></span>
                     </div>
 
                     <div v-if="showDebug">
@@ -227,11 +239,18 @@ createApp({
                 </div>
             </div>
         </div>
+        
+        <details v-if="showDebug">
+            <summary>Json</summary>
+            <pre>{{tableString}}</pre>
+        </details>
+    </div>
+    </div>
+    `
+}).mount('#app');
 
-            
-        <div v-if="table.round && table.round.results"> 
-            <div v-for="result in table.round.results">
-            <h3>{{getPlayer(result.id)?.name}} Rank {{result.rank}}</h3>
+
+/* <h3>{{getPlayer(result.id)?.name}} Rank {{result.rank}}</h3>
             <div>{{result.hand.type.name}}</div>
             <div>
                 <h5>Hand</h5>
@@ -246,14 +265,4 @@ createApp({
                     <div class="back"></div>
                 </div>
                 <hr>
-            </div>
-        </div>
-        
-        <details v-if="showDebug">
-            <summary>Json</summary>
-            <pre>{{tableString}}</pre>
-        </details>
-    </div>
-    </div>
-    `
-}).mount('#app');
+            </div> */

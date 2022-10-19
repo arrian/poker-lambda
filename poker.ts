@@ -274,7 +274,7 @@ interface Rules {
 interface Pot {
 	participants: Record<PlayerId, Hand>
 	total: number
-	ranking: Record<PlayerId, number>
+	rankings: Record<PlayerId, number>
 	winnings: Record<PlayerId, number>
 }
 
@@ -286,11 +286,11 @@ interface LogItem {
 	step: number
 }
 
-interface PlayerResult {
-	id: string
-	hand: Hand
-	rank?: number
-}
+// interface PlayerResult {
+// 	id: string
+// 	hand: Hand
+// 	rank?: number
+// }
 
 // Round specific player data
 interface PlayerData {
@@ -315,7 +315,7 @@ class Round {
 	pots: Array<Pot>
 	log: Array<LogItem>
 	progress: RoundState
-	results: PlayerResult[] | null
+	results: Pot[] | null
 	betIncrement: number
 	blinds: Record<PlayerId, RuleBlind>
 
@@ -637,7 +637,7 @@ class Round {
 			return;
 		}
 		this.actingPlayer = null;
-		this.results = this.rankPlayers();
+		this.results = this.generateResults();
 
 		this.progress = Round.State.ENDED;
 
@@ -648,22 +648,22 @@ class Round {
 		return this.progress === Round.State.ENDED;
 	}
 
-	getPots() {
-		// TODO: handle side pots
-		return [{
-			total: this.getPotSize(),
-			participants: this.rankPlayers()
-		}];
-	}
+	// getPots() {
+	// 	// TODO: handle side pots
+	// 	return [{
+	// 		total: this.getPotSize(),
+	// 		participants: this.rankPlayers()
+	// 	}];
+	// }
 
-	getWinners() {
-		if(this.players.length === 0) return null;
-		var ranked = this.rankPlayers(),
-			winner = ranked[0], // we know this is a winner
-			winners = ranked.filter(rank => Hand.compare(winner.hand, rank.hand) === 0); // find all winners
+	// getWinners() {
+	// 	if(this.players.length === 0) return null;
+	// 	var ranked = this.rankPlayers(),
+	// 		winner = ranked[0], // we know this is a winner
+	// 		winners = ranked.filter(rank => Hand.compare(winner.hand, rank.hand) === 0); // find all winners
 
-		return winners;
-	}
+	// 	return winners;
+	// }
 
 	getBetSize() {
 		const betValues = this.players.map(player => this.playersData[player.id].bet);
@@ -695,6 +695,10 @@ class Round {
 		return this.getPlayer(nextPlayers[0]);
 	}
 
+	isActivePlayer(id: PlayerId) : boolean {
+		return !!this.players.find(player => player.id === id);
+	}
+
 	getActingPlayer() {
 		if(!this.actingPlayer) return null;
 		return this.getPlayer(this.actingPlayer);
@@ -717,26 +721,92 @@ class Round {
 		return this.playersData[player.id].bet === player.worth;
 	}
 
-	rankPlayers() : PlayerResult[] {
-		const players : PlayerResult[] = this.players.map(player => ({
-			id: player.id,
-			hand: new Hand(this.playersData[player.id].cards, this.communityCards)
-		})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
+	generateResults() : Pot[] {
+		// Determine player hand result
+		const playerHands : Record<PlayerId, Hand> = {};
+		this.players.forEach(player => playerHands[player.id] = new Hand(this.playersData[player.id].cards, this.communityCards));
 
-		let previousPlayer: PlayerResult | null = null;
-		players.forEach(player => {
-			if(!previousPlayer) {
-				player.rank = 1;
-			} else if(Hand.compare(player.hand, previousPlayer.hand) === 0) {
-				player.rank = previousPlayer.rank;
+		// Sort players by ranking
+		const playerHandsSorted : [PlayerId, Hand][] = Object.entries(playerHands).sort(([lId, left], [rId, right]) => Hand.compare(left, right)).reverse();
+		
+		// Calculate player overall ranking
+		const overallRankings : Record<PlayerId, number> = {};
+		let previous: [PlayerId, Hand] | null = null;
+		let rank: number = 0;
+		playerHandsSorted.forEach(([playerId, hand]) => {
+			if(!previous) {
+				overallRankings[playerId] = rank;
+			} else if(Hand.compare(hand, previous[1]) === 0) {
+				overallRankings[playerId] = rank;
 			} else {
-				player.rank = previousPlayer.rank ? previousPlayer.rank + 1 : 1;
+				rank++;
+				overallRankings[playerId] = rank;
 			}
-			previousPlayer = player;
+			previous = [playerId, hand];
 		});
 
-		return players;
+		// Calculate pot divisions
+		let previousBetSize = 0;
+		let includedPlayers = [...this.players];
+		
+		let pots : Pot[] = [];
+		let bets = Object.values(this.playersData).map(data => data.bet);
+		
+
+		while(includedPlayers.length > 1) {
+			let participants : Record<PlayerId, Hand> = {};
+			let winnings : Record<PlayerId, number> = {};
+			let rankings : Record<PlayerId, number> = {};
+
+			const currentBetSize = Math.min(...this.players.map(player => this.playersData[player.id].bet).filter(bet => bet > previousBetSize));
+			
+			const winnerRank = Math.min(...includedPlayers.map(player => overallRankings[player.id]));
+			const winningPlayers = includedPlayers.filter(player => winnerRank === overallRankings[player.id]);
+
+			includedPlayers.forEach(player => {
+				rankings[player.id] = overallRankings[player.id];
+				participants[player.id] = playerHands[player.id];
+			});
+
+			const total = bets.map(bet => bet - previousBetSize).filter(bet => bet > 0).reduce((acc, value) => acc + value, 0);
+			winningPlayers.forEach(player => {
+				winnings[player.id] = Math.floor(total / winningPlayers.length); // TODO: fractions should go to player closest to dealer
+			});
+
+			pots.push({
+				participants,
+				winnings,
+				rankings,
+				total
+			});
+
+			previousBetSize = currentBetSize;
+			includedPlayers = this.players.filter(player => this.playersData[player.id].bet > currentBetSize);
+		}
+
+		return pots;
 	}
+
+	// rankPlayers() : PlayerResult[] {
+	// 	const players : PlayerResult[] = this.players.map(player => ({
+	// 		id: player.id,
+	// 		hand: new Hand(this.playersData[player.id].cards, this.communityCards)
+	// 	})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
+
+	// 	let previousPlayer: PlayerResult | null = null;
+	// 	players.forEach(player => {
+	// 		if(!previousPlayer) {
+	// 			player.rank = 1;
+	// 		} else if(Hand.compare(player.hand, previousPlayer.hand) === 0) {
+	// 			player.rank = previousPlayer.rank;
+	// 		} else {
+	// 			player.rank = previousPlayer.rank ? previousPlayer.rank + 1 : 1;
+	// 		}
+	// 		previousPlayer = player;
+	// 	});
+
+	// 	return players;
+	// }
 
 	removePlayer(player : Player) {
 		const resolveActingPlayer = this.actingPlayer === player.id;
@@ -856,10 +926,10 @@ class Table extends EventEmitter {
 		return this.round.hasEnded();
 	}
 
-	getRoundWinners() {
-		if(!this.round) throw new Error('Attempted to get round winners but no round exists.');
-		return this.round.getWinners();
-	}
+	// getRoundWinners() {
+	// 	if(!this.round) throw new Error('Attempted to get round winners but no round exists.');
+	// 	return this.round.getWinners();
+	// }
 
 	completeRound() {
 		
@@ -902,22 +972,22 @@ class Table extends EventEmitter {
 		if(this.round) console.log(`Table: ${this.round.communityCards.getSorted().toString()}`);
 	}
 
-	logRanked() {
-		if(!this.round) throw new Error('Attempted to log ranked players but no round exists.');
-		console.log('--Ranked');
-		var ranked = this.round.rankPlayers();
-		ranked.forEach(rank => {
-			console.log(`${rank.id} is rank ${rank.rank}`);
-		});
-	}
+	// logRanked() {
+	// 	if(!this.round) throw new Error('Attempted to log ranked players but no round exists.');
+	// 	console.log('--Ranked');
+	// 	var ranked = this.round.rankPlayers();
+	// 	ranked.forEach(rank => {
+	// 		console.log(`${rank.id} is rank ${rank.rank}`);
+	// 	});
+	// }
 
-	logWinners() {
-		console.log('--Winners');
-		var winners = this.getRoundWinners();
-		(winners || []).forEach(rank => {
-			console.log(`${rank.id} (${rank.hand?.type?.name} ${new Cards(rank.hand.hand).toString()})`);
-		});
-	}
+	// logWinners() {
+	// 	console.log('--Winners');
+	// 	var winners = this.getRoundWinners();
+	// 	(winners || []).forEach(rank => {
+	// 		console.log(`${rank.id} (${rank.hand?.type?.name} ${new Cards(rank.hand.hand).toString()})`);
+	// 	});
+	// }
 	
 	getNextPlayer(playerId: PlayerId) {
 		const activePlayers = this.players.filter(player => !player.left || player.id === playerId).map(player => player.id);
@@ -939,7 +1009,7 @@ interface RoundPartial {
 	pots: Array<Pot>
 	log: Array<LogItem>
 	progress: RoundState
-	results: PlayerResult[] | null
+	results: Pot[] | null
 	potSize: number
 	betSize: number
 	blinds: Record<PlayerId, RuleBlind>
@@ -957,7 +1027,7 @@ interface TablePartial {
 	player: Player | null | undefined
 }
 
-function getPartialKnowledgePlayersData(player : Player, playersData : Record<PlayerId, PlayerData>) {
+function getPartialKnowledgePlayersData(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
 	const playersDataResult : Record<PlayerId, PlayerData> = {};
 	Object.entries(playersData).forEach(([key, value]) => {
 		console.log('entry', key, value);
@@ -966,7 +1036,7 @@ function getPartialKnowledgePlayersData(player : Player, playersData : Record<Pl
 		} else {
 			playersDataResult[key] = {
 				...value,
-				cards: Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand
+				cards: round.hasEnded() && round.isActivePlayer(key) ? value.cards : Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand unless ended
 			};
 		}
 	});
@@ -982,7 +1052,7 @@ function getPartialKnowledge(playerId: PlayerId | null, table: Table) : TablePar
 			...table.round,
 			actingPlayerActions: player ? table.round.getValidActions(player) : [],
 			deck: player ? new Cards() : table.round.deck, // dealer deck is not known
-			playersData: player ? getPartialKnowledgePlayersData(player, table.round.playersData) : table.round.playersData,
+			playersData: player ? getPartialKnowledgePlayersData(player, table.round.playersData, table.round) : table.round.playersData,
 			potSize: table.round.getPotSize(),
 			betSize: table.round.getBetSize()
 		} : null,
