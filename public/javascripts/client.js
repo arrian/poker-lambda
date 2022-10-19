@@ -9,6 +9,15 @@ const ConnectionStatus = {
     Connected: 'Connected'
 };
 
+const ActionText = {
+	CHECK: 'Check',
+	BET: 'Bet',
+	CALL: 'Call',
+	RAISE: 'Raise',
+	FOLD: 'Fold',
+	ALL_IN: 'All In'
+};
+
 createApp({
     data() {
         return {
@@ -29,7 +38,8 @@ createApp({
                 8: [{ col: 4, row: 1 }, { col: 4, row: 2 }, { col: 4, row: 3 }, { col: 3, row: 3 }, { col: 2, row: 3 }, { col: 1, row: 3 }, { col: 1, row: 2 }, { col: 1, row: 1 }]
             },
             connection: ConnectionStatus.Unknown,
-            ConnectionStatus
+            ConnectionStatus,
+            ActionText
         }
     },
     async mounted() {
@@ -140,12 +150,13 @@ createApp({
 
         <div class="table-grid">
             <div v-if="table.players" v-for="(player, index) in table.players" class="player" :style="playerGridStyle(index, player)">
-            <div :class="{ 'player-active': player?.id === actingPlayer?.id }">
+            <div class="player-inner" :class="{ 'player-active': player?.id === actingPlayer?.id }">
+                <div class="player-turn"></div>
                 <div class="player-name">{{ player.name }}</div>
                 <div class="dealer" v-if="table.round?.button === player.id">Dealer</div>
                 <div>\${{ player.worth }}</div>
                 <div class="badge urgent" v-if="player.left">Left game</div>
-                <div class="badge" v-else="getPlayerData(player.id)?.action">{{getPlayerData(player.id)?.action}} <template v-if="getPlayerData(player.id)?.bet">\${{getPlayerData(player.id)?.bet}}</template></div>
+                <div class="badge" v-else="getPlayerData(player.id)?.action">{{ActionText[getPlayerData(player.id)?.action]}} <template v-if="getPlayerData(player.id)?.bet">\${{getPlayerData(player.id)?.bet}}</template></div>
                 <div class="deck-short">
                     <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" class="card">
                         <div class="front" :style="cardUrl(card)"></div>
@@ -163,7 +174,7 @@ createApp({
                         <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CALL')" @click="sendAction(table.player.id, 'CALL', { value: table.round?.betSize })">Call <template v-if="table.round?.betSize">\${{ table.round?.betSize }}</button>
                     </div>
                     <div>
-                        <input class="small" type="number" v-model="input">
+                        <input class="small" type="number" v-model="input" :disabled="!table?.round?.actingPlayerActions.includes('RAISE') && !table?.round?.actingPlayerActions.includes('BET')">
                         <button class="button small primary" v-if="table?.round?.actingPlayerActions.includes('BET')" @click="sendAction(table.player.id, 'BET', { value: +input })">Bet</button>
                         <button class="button small primary" :disabled="!table?.round?.actingPlayerActions.includes('RAISE')" @click="sendAction(table.player.id, 'RAISE', { value: +input })">Raise<template v-if="input"> \${{input}}</template></button>
                     </div>

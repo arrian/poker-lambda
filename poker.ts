@@ -1,3 +1,4 @@
+import { timeStamp } from 'console';
 import { Card, Suits, Values, Suit, Value, Cards, SuitName, ValueName } from './cards';
 const _ = require('lodash');
 const cuid = require('cuid');
@@ -293,6 +294,68 @@ interface PlayerData {
 	action: ActionType | null,
 	bet: number,
 	cards: Cards
+}
+
+class PlayerSet {
+	players: Record<PlayerId, Player>
+	order: Record<PlayerId, number>
+	counter: number
+
+	constructor(players?: Player[] | null, order?: Record<PlayerId, number> | null) {
+		this.counter = 0;
+		this.players = {};
+		if(players) {
+			players.forEach(player => this.players[player.id] = player);
+		}
+
+		if(order) {
+			this.order = {...order};
+		} else {
+			this.order = {};
+			Object.values(this.players).forEach((player, index) => this.order[player.id] = index);
+		}
+
+		this.counter = Math.max(...Object.values(this.order));
+	}
+
+	add(player: Player) {
+		this.counter++;
+		this.players[player.id] = player;
+		this.order[player.id] = this.counter;
+	}
+
+	remove(player: Player) {
+		delete this.players[player.id];
+		delete this.order[player.id];
+	}
+	
+	copy() {
+		return new PlayerSet(this.getPlayers());
+	}
+
+	size() {
+		return this.players.length;
+	}
+
+	getPlayerById(playerId: PlayerId) {
+		return this.players[playerId];
+	}
+
+	getPlayers() {
+		return Object.values(this.players);
+	}
+
+	getNextPlayer(playerId: PlayerId) {
+		if(!playerId) {
+			throw new Error('Failed to get next player. Player id provided was null.');
+		}
+		const orderedPlayers = Object.entries(this.order).sort(([aId, aOrder], [bId, bOrder]) => aOrder - bOrder).map(([id]) => id);
+		const currentIndex = orderedPlayers.findIndex(id => id === playerId);
+		if(currentIndex < 0) throw new Error('Could not find player with id ' + playerId);
+		const nextPlayers = [...orderedPlayers.slice(currentIndex + 1), ...orderedPlayers.slice(0, currentIndex)];
+		if(nextPlayers.length < 1) return null;
+		return this.getPlayerById(nextPlayers[0]);
+	}
 }
 
 type RoundState = string;
@@ -681,7 +744,7 @@ class Round {
 		const activePlayers : Record<string, boolean> = {};
 		this.players.forEach(player => activePlayers[player.id] = true);
 		const nextPlayers = [...orderedPlayers.slice(currentIndex + 1), ...orderedPlayers.slice(0, currentIndex)].filter(player => activePlayers[player]);
-		if(nextPlayers.length < 1) throw new Error('Unable to move to next player. There are not enough players left.');
+		if(nextPlayers.length < 1) return null;
 		return this.getPlayer(nextPlayers[0]);
 	}
 
@@ -763,6 +826,7 @@ class Table extends EventEmitter {
 	players: Player[]
 	round: Round | null
 	rules: Rules
+	button: PlayerId | null
 
 	constructor(name: string) {
 		super();
@@ -771,6 +835,7 @@ class Table extends EventEmitter {
 		this.name = name;
 		this.players = [];
 		this.round = null;
+		this.button = null;
 
 		this.rules = {
 			ante: 10,
@@ -806,6 +871,10 @@ class Table extends EventEmitter {
 	}
 
 	startRound() {
+		if(this.players.length < 2) {
+			throw new Error(`Can't start round with fewer than 2 players`);
+		}
+		
 		this.players = this.players.filter(player => !player.left);
 
 		this.round = new Round(this.players, this.rules);
@@ -815,12 +884,13 @@ class Table extends EventEmitter {
 	}
 
 	nextRound() {
-		const lastPlayer = this.players.shift();
-		if(!lastPlayer) throw new Error('Failed to shift player order while proceeding to next round.');
-		this.players.push(lastPlayer);
-		this.round = new Round(this.players, this.rules);
+		if(this.players.length < 2) {
+			throw new Error(`Can't start round with fewer than 2 players`);
+		}
 
 		this.players = this.players.filter(player => !player.left);
+		this.round = new Round(this.players, this.rules);
+
 
 		this.emit('next');
 	}
@@ -828,8 +898,6 @@ class Table extends EventEmitter {
 	endRound() {
 		if(!this.round) throw new Error('Attempted to end a round but no round exists.');
 		this.round.end();
-
-		this.players = this.players.filter(player => !player.left);
 
 		this.emit('ended');
 	}

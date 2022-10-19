@@ -106,7 +106,8 @@ app.socketConnection = client => {
   try {
     table.join(player);
   } catch(e) {
-    console.error(e);
+    console.error(colors.red.bold(e.message));
+    console.error(colors.red.bold(e.stack));
   }
 
   client.on('action', ({ player: playerId, action, data }, acknowledge) => {
@@ -121,15 +122,21 @@ app.socketConnection = client => {
       acknowledge(getPartialKnowledge(player.id, table));
       broadcastStatus({ exclude: [player.id] });
     } catch(e) {
-      console.error(e);
+      console.error(colors.red.bold(e.message));
+      console.error(colors.red.bold(e.stack));
     }
   });
 
   client.on('disconnect', () => {
     console.log('disconnect');
     delete playerConnections[player.id];
-    table.leave(player);
-    broadcastStatus();
+    try {
+      table.leave(player);
+      broadcastStatus();
+    } catch(e) {
+      console.error(colors.red.bold(e.message));
+      console.error(colors.red.bold(e.stack));
+    }
   });
 };
 
