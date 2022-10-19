@@ -55,7 +55,6 @@ createApp({
             console.log('status', table);
             this.onUpdate(table);
         });
-        // await this.load();
     },
     computed: {
         actingPlayer() {
@@ -64,7 +63,7 @@ createApp({
 
         communityCards() {
             const cards = this.table?.round?.communityCards?.cards || [];
-            return [...cards, ...Array(5 - cards.length).fill({})];
+            return [...cards, ...Array(5 - cards.length).fill(null)];
         }
     },
     methods: {
@@ -82,7 +81,7 @@ createApp({
             this.table.players.forEach(player => this.inputs[player.id] = table.round?.betSize || 0);
         },
         cardUrl(card) {
-            if(!card.value || !card.suit) return 'background: none';
+            if(!card || !card.value || !card.suit) return 'background: none';
             const value = this.table.ValueName[card.value];
             const suit = this.table.SuitName[card.suit];
             return `background-image: url('https://raw.githubusercontent.com/arrian/cards-svg/master/svg/${value}-${suit}.svg')`;
@@ -153,12 +152,13 @@ createApp({
             <div class="player-inner" :class="{ 'player-active': player?.id === actingPlayer?.id }">
                 <div class="player-turn"></div>
                 <div class="player-name">{{ player.name }}</div>
-                <div class="dealer" v-if="table.round?.button === player.id">Dealer</div>
+                <div class="dealer" v-if="table.round?.rules.button === player.id">Dealer</div>
+                <div class="blind" v-else-if="table.round?.blinds[player.id]">{{ table.round?.blinds[player.id]?.name }}</div>
                 <div>\${{ player.worth }}</div>
                 <div class="badge urgent" v-if="player.left">Left game</div>
                 <div class="badge" v-else="getPlayerData(player.id)?.action">{{ActionText[getPlayerData(player.id)?.action]}} <template v-if="getPlayerData(player.id)?.bet">\${{getPlayerData(player.id)?.bet}}</template></div>
                 <div class="deck-short">
-                    <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" class="card">
+                    <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" class="card" :class="{ empty: !card, flipped: card && !card.value }">
                         <div class="front" :style="cardUrl(card)"></div>
                         <div class="back"></div>
                     </div>
@@ -171,7 +171,7 @@ createApp({
                 <div class="player-actions" v-if="table.player?.id === player.id || showDebug">
                     <div>
                         <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CHECK')" @click="sendAction(table.player.id, 'CHECK')">Check</button>
-                        <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CALL')" @click="sendAction(table.player.id, 'CALL', { value: table.round?.betSize })">Call <template v-if="table.round?.betSize">\${{ table.round?.betSize }}</button>
+                        <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CALL')" @click="sendAction(table.player.id, 'CALL', { value: table.round?.betSize })">Call <template v-if="table.round?.betSize">\${{ table.round?.betSize }}</template></button>
                     </div>
                     <div>
                         <input class="small" type="number" v-model="input" :disabled="!table?.round?.actingPlayerActions.includes('RAISE') && !table?.round?.actingPlayerActions.includes('BET')">
@@ -180,7 +180,7 @@ createApp({
                     </div>
                     <div>
                         <button class="button small primary" :disabled="!table?.round?.actingPlayerActions.includes('ALL_IN')" @click="sendAction(table.player.id, 'ALL_IN', { value: player.worth })">All In <template v-if="player.worth">\${{ player.worth }}</template></button>
-                        <button class="button small destructive":disabled="!table?.round?.actingPlayerActions.includes('FOLD')" @click="sendAction(table.player.id, 'FOLD')">Fold</button>
+                        <button class="button small destructive" :disabled="!table?.round?.actingPlayerActions.includes('FOLD')" @click="sendAction(table.player.id, 'FOLD')">Fold</button>
                     </div>
                 </div>
             </div>
@@ -189,10 +189,14 @@ createApp({
                 <div class="details-inner">
                     <div>{{ table.round?.progress }}</div>
                     <div v-if="actingPlayer">Awaiting {{actingPlayer.name}}</div>
-                    <div>
+                    <div class="table-actions">
                         <button @click="sendAction(null, 'ROUND_START')">Start Round</button>
                         <button @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
                         <button @click="sendAction(null, 'ROUND_END')">End Round</button>
+                    </div>
+                    <div class="card flipped deck-top">
+                        <div class="front"></div>
+                        <div class="back"></div>
                     </div>
                     <div>
                         <div v-if="table.round?.potSize" class="badge positive pot-size">Pot \${{table.round?.potSize}}</div>
@@ -216,7 +220,7 @@ createApp({
             </div>
             <div class="community-cards">
                 <div class="community-cards-inner">
-                    <div v-for="(card, index) in communityCards" class="card" :class="{ empty: !card.value }">
+                    <div v-for="(card, index) in communityCards" class="card" :class="{ empty: !card, flipped: card && !card.value }">
                         <div class="front" :style="cardUrl(card)"></div>
                         <div class="back"></div>
                     </div>
@@ -224,37 +228,32 @@ createApp({
             </div>
         </div>
 
-
-
-        
-        
-        
+            
         <div v-if="table.round && table.round.results"> 
             <div v-for="result in table.round.results">
-            <h3>{{getPlayer(result.id).name}} Rank {{result.rank}}</h3>
+            <h3>{{getPlayer(result.id)?.name}} Rank {{result.rank}}</h3>
             <div>{{result.hand.type.name}}</div>
             <div>
                 <h5>Hand</h5>
                 <div v-for="(card, index) in result.hand.hand" class="card">
-                <div class="front" :style="cardUrl(card)"></div>
-                <div class="back"></div>
+                    <div class="front" :style="cardUrl(card)"></div>
+                    <div class="back"></div>
                 </div>
 
                 <h5>Kickers</h5>
                 <div v-for="(card, index) in result.hand.kickers" class="card">
-                <div class="front" :style="cardUrl(card)"></div>
-                <div class="back"></div>
+                    <div class="front" :style="cardUrl(card)"></div>
+                    <div class="back"></div>
                 </div>
                 <hr>
             </div>
-            </div>
         </div>
+        
+        <details v-if="showDebug">
+            <summary>Json</summary>
+            <pre>{{tableString}}</pre>
+        </details>
     </div>
-    
-    <details v-if="showDebug">
-    <summary>Json</summary>
-    <pre>{{tableString}}</pre>
-    </details>
     </div>
     `
 }).mount('#app');

@@ -264,12 +264,18 @@ interface RuleBlind {
 }
 
 interface Rules {
-	ante: number;
-	blinds: RuleBlind[]
+	ante: number // buy in amount
+	blinds: RuleBlind[] // blind info
+	button: PlayerId | null // player acting as dealer
+	limit: number // number of betting rounds / 0 for no limit poker
+	raiseMinimum: boolean // only allow raises above previous raise increments
 }
 
 interface Pot {
-
+	participants: Record<PlayerId, Hand>
+	total: number
+	ranking: Record<PlayerId, number>
+	winnings: Record<PlayerId, number>
 }
 
 interface LogItem {
@@ -296,68 +302,6 @@ interface PlayerData {
 	cards: Cards
 }
 
-class PlayerSet {
-	players: Record<PlayerId, Player>
-	order: Record<PlayerId, number>
-	counter: number
-
-	constructor(players?: Player[] | null, order?: Record<PlayerId, number> | null) {
-		this.counter = 0;
-		this.players = {};
-		if(players) {
-			players.forEach(player => this.players[player.id] = player);
-		}
-
-		if(order) {
-			this.order = {...order};
-		} else {
-			this.order = {};
-			Object.values(this.players).forEach((player, index) => this.order[player.id] = index);
-		}
-
-		this.counter = Math.max(...Object.values(this.order));
-	}
-
-	add(player: Player) {
-		this.counter++;
-		this.players[player.id] = player;
-		this.order[player.id] = this.counter;
-	}
-
-	remove(player: Player) {
-		delete this.players[player.id];
-		delete this.order[player.id];
-	}
-	
-	copy() {
-		return new PlayerSet(this.getPlayers());
-	}
-
-	size() {
-		return this.players.length;
-	}
-
-	getPlayerById(playerId: PlayerId) {
-		return this.players[playerId];
-	}
-
-	getPlayers() {
-		return Object.values(this.players);
-	}
-
-	getNextPlayer(playerId: PlayerId) {
-		if(!playerId) {
-			throw new Error('Failed to get next player. Player id provided was null.');
-		}
-		const orderedPlayers = Object.entries(this.order).sort(([aId, aOrder], [bId, bOrder]) => aOrder - bOrder).map(([id]) => id);
-		const currentIndex = orderedPlayers.findIndex(id => id === playerId);
-		if(currentIndex < 0) throw new Error('Could not find player with id ' + playerId);
-		const nextPlayers = [...orderedPlayers.slice(currentIndex + 1), ...orderedPlayers.slice(0, currentIndex)];
-		if(nextPlayers.length < 1) return null;
-		return this.getPlayerById(nextPlayers[0]);
-	}
-}
-
 type RoundState = string;
 
 class Round {
@@ -366,7 +310,6 @@ class Round {
 	deck: Cards
 	players: Player[]
 	playersData: Record<PlayerId, PlayerData>
-	button: PlayerId | null
 	actingPlayer?: PlayerId | null
 	rules: Rules
 	pots: Array<Pot>
@@ -374,11 +317,12 @@ class Round {
 	progress: RoundState
 	results: PlayerResult[] | null
 	betIncrement: number
+	blinds: Record<PlayerId, RuleBlind>
 
 	static State: Record<string, RoundState>
 
 	constructor(players: Player[], rules: Rules) {
-		if(players.length <= 0) throw new Error('Can\'t start a round with no players');
+		if(players.length <= 0) throw new Error(`Can't start a round with no players`);
 
 		this.id = cuid();
 
@@ -397,10 +341,10 @@ class Round {
 				cards: new Cards()
 			};
 		});
-		this.button = players[0].id;
-		this.actingPlayer = this.getNextPlayer(this.button)?.id;
-
 		this.rules = rules;
+		this.rules.button = this.rules.button || players[0].id;
+		
+		this.actingPlayer = this.getNextPlayer(this.rules.button)?.id;
 		
 		this.pots = [];
 
@@ -409,6 +353,7 @@ class Round {
 		this.results = null;
 
 		this.betIncrement = 0;
+		this.blinds = {};
 
 		this.progress = Round.State.STARTING;
 		this.record(null, new Action(Action.Type.STARTED));
@@ -611,6 +556,7 @@ class Round {
 				if(!actingPlayer) {
 					throw new Error('Failed to get acting player on the preflop');
 				} else if(index === 0) {
+					this.blinds[actingPlayer.id] = blind;
 					this.bet(actingPlayer, {
 						type: Action.Type.BET,
 						data: {
@@ -619,6 +565,7 @@ class Round {
 						}
 					});
 				} else {
+					this.blinds[actingPlayer.id] = blind;
 					this.raise(actingPlayer, {
 						type: Action.Type.RAISE,
 						data: {
@@ -644,7 +591,7 @@ class Round {
 			}
 		}
 
-		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+		this.actingPlayer = this.getNextPlayer(this.rules.button)?.id;
 		this.clearActedFlags();
 
 		this.progress = Round.State.FLOPPED;
@@ -661,7 +608,7 @@ class Round {
 			throw new Error('Failed to draw card on turn.');
 		}
 
-		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+		this.actingPlayer = this.getNextPlayer(this.rules.button)?.id;
 		this.clearActedFlags();
 
 		this.progress = Round.State.TURNED;
@@ -678,7 +625,7 @@ class Round {
 			throw new Error('Failed to draw card on river.');
 		}
 
-		this.actingPlayer = this.getNextPlayer(this.button)?.id;
+		this.actingPlayer = this.getNextPlayer(this.rules.button)?.id;
 		this.clearActedFlags();
 
 		this.progress = Round.State.RIVERED;
@@ -826,7 +773,6 @@ class Table extends EventEmitter {
 	players: Player[]
 	round: Round | null
 	rules: Rules
-	button: PlayerId | null
 
 	constructor(name: string) {
 		super();
@@ -835,7 +781,6 @@ class Table extends EventEmitter {
 		this.name = name;
 		this.players = [];
 		this.round = null;
-		this.button = null;
 
 		this.rules = {
 			ante: 10,
@@ -845,7 +790,10 @@ class Table extends EventEmitter {
 			}, {
 				name: 'Big blind',
 				value: 40
-			}]
+			}],
+			button: null,
+			limit: 0,
+			raiseMinimum: false
 		};
 	}
 
@@ -875,8 +823,8 @@ class Table extends EventEmitter {
 			throw new Error(`Can't start round with fewer than 2 players`);
 		}
 		
+		this.rules.button = this.rules.button ? this.getNextPlayer(this.rules.button) : this.players[0].id;
 		this.players = this.players.filter(player => !player.left);
-
 		this.round = new Round(this.players, this.rules);
 		
 
@@ -888,6 +836,7 @@ class Table extends EventEmitter {
 			throw new Error(`Can't start round with fewer than 2 players`);
 		}
 
+		this.rules.button = this.rules.button ? this.getNextPlayer(this.rules.button) : this.players[0].id;
 		this.players = this.players.filter(player => !player.left);
 		this.round = new Round(this.players, this.rules);
 
@@ -917,8 +866,12 @@ class Table extends EventEmitter {
 	}
 
 	join(player: Player) {
-		if(this.players.length >= MAX_PLAYERS) throw new Error('Player can\'t join. The table is full');
+		if(this.players.length >= MAX_PLAYERS) throw new Error(`Player can't join. The table is full`);
 		this.players.push(player);
+
+		if(!this.rules.button) {
+			this.rules.button = player.id;
+		}
 
 		this.emit('joined');
 	}
@@ -926,10 +879,14 @@ class Table extends EventEmitter {
 	leave(player: Player) {
 		player.left = true;
 
+		if(this.rules.button === player.id) {
+			this.rules.button = this.getNextPlayer(player.id);
+		}
+
 		if(this.round) {
 			this.round.dead(player);
 		} else {
-			this.players = this.players.filter(player => !player.left);		
+			this.players = this.players.filter(player => !player.left);
 		}
 
 		this.emit('left');
@@ -961,6 +918,12 @@ class Table extends EventEmitter {
 			console.log(`${rank.id} (${rank.hand?.type?.name} ${new Cards(rank.hand.hand).toString()})`);
 		});
 	}
+	
+	getNextPlayer(playerId: PlayerId) {
+		const activePlayers = this.players.filter(player => !player.left || player.id === playerId).map(player => player.id);
+		const index = activePlayers.findIndex(id => id === playerId);
+		return activePlayers[index + 1 >= activePlayers.length ? 0 : index + 1];
+	}
 }
 
 // Partial knowledge round
@@ -970,16 +933,16 @@ interface RoundPartial {
 	deck: Cards
 	players: Player[]
 	playersData: Record<PlayerId, PlayerData>
-	button: PlayerId | null
 	actingPlayer?: PlayerId | null,
 	actingPlayerActions: ActionType[]
 	rules: Rules
 	pots: Array<Pot>
 	log: Array<LogItem>
 	progress: RoundState
-	results: PlayerResult[] | null,
-	potSize: number,
+	results: PlayerResult[] | null
+	potSize: number
 	betSize: number
+	blinds: Record<PlayerId, RuleBlind>
 }
 
 // Partial knowledge table 
