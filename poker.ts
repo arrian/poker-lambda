@@ -2,6 +2,7 @@ import { Card, Suits, Values, Suit, Value, Cards, SuitName, ValueName } from './
 const _ = require('lodash');
 const cuid = require('cuid');
 const colors = require('colors');
+const EventEmitter = require('events');
 
 const DEAL_SIZE = 2;
 const HAND_SIZE = 5;
@@ -197,11 +198,15 @@ class Player {
 	name: string
 	worth: number
 
+	left: boolean
+
 	constructor(name: string) {
 		this.id = cuid();
 		this.name = name;
 
 		this.worth = 3000; // temp value
+
+		this.left = false;
 	}
 
 	log() {
@@ -305,6 +310,7 @@ class Round {
 	log: Array<LogItem>
 	progress: RoundState
 	results: PlayerResult[] | null
+	betIncrement: number
 
 	static State: Record<string, RoundState>
 
@@ -339,6 +345,8 @@ class Round {
 
 		this.results = null;
 
+		this.betIncrement = 0;
+
 		this.progress = Round.State.STARTING;
 		this.record(null, new Action(Action.Type.STARTED));
 
@@ -363,6 +371,12 @@ class Round {
 			this.river();
 		} else {
 			this.end();
+		}
+		
+		// In the case where no players are awaiting an action after continuing to the next
+		// state then keep progressing
+		if(!this.isAwaitingAction()) {
+			this.nextState();
 		}
 	}
 
@@ -432,45 +446,73 @@ class Round {
 		this.dead(player);
 	}
 
+	isCheckValid(player: Player) {
+		return this.playersData[player.id].bet === this.getBetSize() && this.playersData[player.id].bet > 0;
+	}
+
 	check(player: Player, action: Action) {
-		if(this.playersData[player.id].bet !== this.getBetSize()) throw new Error('Check can only be called if the player bet is the same as the highest bet.');
+		if(!this.isCheckValid(player)) throw new Error('Check can only be called if the player bet is the same as the highest bet and player has already bet.');
 		this.record(player, action);
 		this.playersData[player.id].acted = true;
 		this.playersData[player.id].action = Action.Type.CHECK;
 	}
 
+	isBetValid(player: Player) {
+		return this.getBetSize() === 0;
+	}
+
 	bet(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value <= 0) throw new Error('A bet > 0 was expected');
-		if(this.getBetSize()) throw new Error('Can\'t bet after a bet. Call or raise was expected.');
+		if(!this.isBetValid(player)) throw new Error('Can\'t bet after a bet. Call or raise was expected.');
 		this.record(player, action);
 		this.playersData[player.id].acted = true;
 		this.playersData[player.id].action = Action.Type.BET;
-		this.playersData[player.id].bet = action.data?.value;
+		this.placeBet(player, action.data?.value);
+	}
+
+	isRaiseValid(player: Player) {
+		return this.getBetSize() > 0;
 	}
 
 	raise(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value <= this.getBetSize()) throw new Error('A raise larger than the current bet was expected.');
+		if(!this.isRaiseValid(player)) throw new Error('Raise can only be called after an initial bet.');
 		this.record(player, action);
 		this.clearActedFlags();
 		this.playersData[player.id].acted = true;
 		this.playersData[player.id].action = Action.Type.RAISE;
-		this.playersData[player.id].bet = action.data.value;
+		this.placeBet(player, action.data?.value);
+	}
+
+	isCallValid(player: Player) {
+		return this.getBetSize() > 0 && this.playersData[player.id].bet !== this.getBetSize();
 	}
 
 	call(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value !== this.getBetSize()) throw new Error('A call must be the size of the current bet.');
+		if(!this.isCallValid(player)) throw new Error('Call can only be called after an initial bet and when current bet is smaller than table bet.');
 		this.record(player, action);
 		this.playersData[player.id].acted = true;
 		this.playersData[player.id].action = Action.Type.CALL;
-		this.playersData[player.id].bet = action.data.value;
+		this.placeBet(player, action.data?.value);
+	}
+
+	isAllInValid(player: Player) {
+		return !this.isPlayerAllIn(player);
 	}
 
 	allIn(player: Player, action: Action) {
 		if(!action || !action.data || !action.data.value || action.data.value !== player.worth) throw new Error('All in must be of the size of the player worth');// fix this, depend on size of other all ins
+		if(!this.isAllInValid(player)) throw new Error('Player can only call all-in once.');
 		this.record(player, action);
 		this.playersData[player.id].acted = true;
 		this.playersData[player.id].action = Action.Type.ALL_IN;
-		this.playersData[player.id].bet = action.data.value;
+		this.placeBet(player, action.data?.value);
+	}
+
+	placeBet(player: Player, bet: number) {
+		this.betIncrement = Math.max(this.betIncrement, bet - this.getBetSize());
+		this.playersData[player.id].bet = bet;
 	}
 
 	deal() {
@@ -648,6 +690,19 @@ class Round {
 		return this.getPlayer(this.actingPlayer);
 	}
 
+	getValidActions(player: Player) : ActionType[] {
+		let actions = [];
+		if(this.actingPlayer === player.id) {
+			actions.push(Action.Type.FOLD);
+			if(this.isCheckValid(player)) actions.push(Action.Type.CHECK);
+			if(this.isBetValid(player)) actions.push(Action.Type.BET);
+			if(this.isRaiseValid(player)) actions.push(Action.Type.RAISE);
+			if(this.isCallValid(player)) actions.push(Action.Type.CALL);
+			if(this.isAllInValid(player)) actions.push(Action.Type.ALL_IN);
+		}
+		return actions;
+	}
+
 	isPlayerAllIn(player: Player) {
 		return this.playersData[player.id].bet === player.worth;
 	}
@@ -674,7 +729,15 @@ class Round {
 	}
 
 	removePlayer(player : Player) {
+		const resolveActingPlayer = this.actingPlayer === player.id;
+		const nextPlayer = this.getNextPlayer(player.id);
+
 		this.players = this.players.filter(p => p.id !== player.id);
+
+		if(resolveActingPlayer) {
+			this.actingPlayer = nextPlayer?.id;
+			this.nextState(nextPlayer);
+		}
 	}
 
 	clearActedFlags() {
@@ -694,7 +757,7 @@ Round.State = {
 
 
 
-class Table {
+class Table extends EventEmitter {
 	id: string
 	name: string
 	players: Player[]
@@ -702,6 +765,8 @@ class Table {
 	rules: Rules
 
 	constructor(name: string) {
+		super();
+
 		this.id = cuid();
 		this.name = name;
 		this.players = [];
@@ -720,8 +785,9 @@ class Table {
 	}
 
 	act(playerId: PlayerId, action: Action) {
+		console.log('act', playerId, action);
 		if(!playerId && action.type === Action.Type.ROUND_START) this.startRound();
-		if(!playerId && action.type === Action.Type.ROUND_NEXT) this.nextRound();
+		else if(!playerId && action.type === Action.Type.ROUND_NEXT) this.nextRound();
 		else if(!playerId && action.type === Action.Type.ROUND_END) this.endRound();
 		else {
 			if(!this.round) throw new Error('No round currently active');
@@ -729,6 +795,8 @@ class Table {
 			if(!player) throw new Error(`Player with id ${playerId} could not be found while attempting to act.`);
 			this.round.act(player, action);
 		}
+
+		this.emit('acted');
 	}
 
 	tick() {
@@ -738,7 +806,12 @@ class Table {
 	}
 
 	startRound() {
+		this.players = this.players.filter(player => !player.left);
+
 		this.round = new Round(this.players, this.rules);
+		
+
+		this.emit('started');
 	}
 
 	nextRound() {
@@ -746,11 +819,19 @@ class Table {
 		if(!lastPlayer) throw new Error('Failed to shift player order while proceeding to next round.');
 		this.players.push(lastPlayer);
 		this.round = new Round(this.players, this.rules);
+
+		this.players = this.players.filter(player => !player.left);
+
+		this.emit('next');
 	}
 
 	endRound() {
 		if(!this.round) throw new Error('Attempted to end a round but no round exists.');
 		this.round.end();
+
+		this.players = this.players.filter(player => !player.left);
+
+		this.emit('ended');
 	}
 
 	isRoundComplete() {
@@ -764,18 +845,26 @@ class Table {
 	}
 
 	completeRound() {
-
+		
 	}
 
 	join(player: Player) {
 		if(this.players.length >= MAX_PLAYERS) throw new Error('Player can\'t join. The table is full');
 		this.players.push(player);
+
+		this.emit('joined');
 	}
 
 	leave(player: Player) {
-		var removed = _.remove(this.players, (p: Player) => player.id === p.id);
-		if(removed.length < 1) throw new Error('Could not find the player to remove');
-		else if(removed.length > 1) throw new Error('Found more than one of the player to remove');
+		player.left = true;
+
+		if(this.round) {
+			this.round.dead(player);
+		} else {
+			this.players = this.players.filter(player => !player.left);		
+		}
+
+		this.emit('left');
 	}
 
 	getActingPlayer() {
@@ -814,7 +903,8 @@ interface RoundPartial {
 	players: Player[]
 	playersData: Record<PlayerId, PlayerData>
 	button: PlayerId | null
-	actingPlayer?: PlayerId | null
+	actingPlayer?: PlayerId | null,
+	actingPlayerActions: ActionType[]
 	rules: Rules
 	pots: Array<Pot>
 	log: Array<LogItem>
@@ -832,7 +922,8 @@ interface TablePartial {
 	round: RoundPartial | null
 	rules: Rules,
 	ValueName: Record<string, string>,
-	SuitName: Record<string, string>
+	SuitName: Record<string, string>,
+	player: Player | null | undefined
 }
 
 function getPartialKnowledgePlayersData(player : Player, playersData : Record<PlayerId, PlayerData>) {
@@ -844,25 +935,29 @@ function getPartialKnowledgePlayersData(player : Player, playersData : Record<Pl
 		} else {
 			playersDataResult[key] = {
 				...value,
-				cards: new Cards() // players shouldn't know other players hand
+				cards: Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand
 			};
 		}
 	});
 	return playersDataResult;
 }
 
-function getPartialKnowledge(player: Player | null, table: Table) : TablePartial {
+function getPartialKnowledge(playerId: PlayerId | null, table: Table) : TablePartial {
+	const player = playerId ? table.round?.getPlayer(playerId) : null;
+
 	return {
 		...table,
 		round: table.round ? {
 			...table.round,
+			actingPlayerActions: player ? table.round.getValidActions(player) : [],
 			deck: player ? new Cards() : table.round.deck, // dealer deck is not known
 			playersData: player ? getPartialKnowledgePlayersData(player, table.round.playersData) : table.round.playersData,
 			potSize: table.round.getPotSize(),
 			betSize: table.round.getBetSize()
 		} : null,
 		ValueName,
-		SuitName
+		SuitName,
+		player: player
 	}
 }
 

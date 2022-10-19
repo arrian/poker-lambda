@@ -71,7 +71,13 @@ export class Card {
 	suit: string;
 	rank: number;
 
-	constructor(value:string, suit?:string) {
+	constructor(value?:string, suit?:string) {
+		if(!value) {
+			this.suit = '';
+			this.value = '';
+			this.rank = 0;
+			return;
+		}
 		if(isString(value) && !suit) {
 			this.suit = value.length === 2 ? value[1] : value[2];
 			this.value = value.length === 2 ? value[0] : value[0] + value[1];
@@ -290,6 +296,14 @@ export class Cards {
 
 		cards.shuffle();
 
+		return cards;
+	}
+
+	static createDeckUnkownCards(length:number) {
+		let cards = new Cards();
+		for(let i = 0; i < length; i++) {
+			cards.add(new Card());
+		}
 		return cards;
 	}
 

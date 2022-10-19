@@ -9,19 +9,25 @@ const colors = require('colors');
 var { Table, Player, Cards, Action, ValueName, SuitName, getPartialKnowledge } = require('./poker');
 
 var table = new Table('test');
-var player1 = new Player('player 1');
-var player2 = new Player('player 2');
-var player3 = new Player('player 3');
-var player4 = new Player('player 4');
-var player5 = new Player('player 5');
-var player6 = new Player('player 6');
-table.join(player1);
-table.join(player2);
-table.join(player3);
-table.join(player4);
-table.join(player5);
-table.join(player6);
-table.startRound();
+
+let playerConnections = {};
+
+function broadcastStatus({exclude = []} = { exclude: []}) {
+  Object.entries(playerConnections).filter(([playerId, connection]) => !exclude.includes(playerId)).forEach(([playerId, connection]) => {
+    console.log('status to', playerId);
+    connection.emit('status', getPartialKnowledge(playerId, table));
+  });
+}
+
+table.on('joined', () => {
+  console.log('sending joined status');
+  broadcastStatus();
+});
+
+table.on('left', () => {
+  console.log('sending left status');
+  broadcastStatus();
+});
 
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
@@ -86,5 +92,45 @@ app.use(function(err, req, res, next) {
   res.status(err.status || 500);
   res.render('error');
 });
+
+let playerCounter = 0;
+
+app.socketConnection = client => {
+  console.log('client connected');
+
+  playerCounter++;
+  
+  const player = new Player('Player ' + playerCounter);
+  playerConnections[player.id] = client;
+
+  try {
+    table.join(player);
+  } catch(e) {
+    console.error(e);
+  }
+
+  client.on('action', ({ player: playerId, action, data }, acknowledge) => {
+    // TODO: don't allow table actions from players
+    if(playerId && player.id !== playerId) {
+      console.error('Player id in action does not match source connection', playerId, player.id);
+      return;
+    }
+    console.log('on action', playerId, action, data);
+    try {
+      table.act(playerId, { type: action, data });
+      acknowledge(getPartialKnowledge(player.id, table));
+      broadcastStatus({ exclude: [player.id] });
+    } catch(e) {
+      console.error(e);
+    }
+  });
+
+  client.on('disconnect', () => {
+    console.log('disconnect');
+    delete playerConnections[player.id];
+    table.leave(player);
+    broadcastStatus();
+  });
+};
 
 module.exports = app;

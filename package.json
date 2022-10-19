@@ -17,6 +17,8 @@
     "jade": "^0.29.0",
     "lodash": "^4.17.21",
     "morgan": "~1.9.1",
+    "socket.io": "^4.5.3",
+    "socket.io-client": "^4.5.3",
     "ts-node": "^10.9.1",
     "typescript": "^4.8.4"
   },
