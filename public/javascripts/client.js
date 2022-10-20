@@ -39,7 +39,11 @@ createApp({
             },
             connection: ConnectionStatus.Unknown,
             ConnectionStatus,
-            ActionText
+            ActionText,
+            showCard: {
+                communityCards: [false, false, false, false, false],
+                playerCards: [false, false]
+            }
         }
     },
     async mounted() {
@@ -87,6 +91,23 @@ createApp({
             this.input = Math.min(table.round?.betSize + table.round?.betIncrement || 0, table.player?.worth - 1);
             this.inputs = {};
             this.table.players.forEach(player => this.inputs[player.id] = table.round?.betSize || 0);
+
+            if(this.isAwaitingCommunityCardTransition()) {
+                this.startCommunityCardTransition();
+            }
+        },
+        isAwaitingCommunityCardTransition() {
+            return this.showCard.communityCards.filter(show => show).length !== this.table?.round?.communityCards?.cards.length;
+        },
+        flipNextCommunityCard() {
+            const index = this.showCard.communityCards.indexOf(false);
+            if(index >= 0) this.showCard.communityCards[index] = true;
+        },
+        startCommunityCardTransition() {
+            setTimeout(() => {
+                this.flipNextCommunityCard();
+                if(this.isAwaitingCommunityCardTransition()) this.startCommunityCardTransition();
+            }, 1000);
         },
         cardUrl(card) {
             if(!card || !card.value || !card.suit) return 'background: none';
@@ -152,69 +173,91 @@ createApp({
     },
     template: `
     <div v-if="table" class="poker container">
-        <div class="badge urgent connection" :style="connection === ConnectionStatus.Disconnected ? 'opacity: 1; visibility: visible' : 'opacity: 0; visibility: hidden'">Disconnected</div>
+        <div class="badge urgent connection" :style="connection === ConnectionStatus.Disconnected ? 'opacity: 1; visibility: visible' : 'opacity: 0; visibility: hidden'">
+            Disconnected</div>
 
 
         <div class="table-grid">
             <div v-if="table.players" v-for="(player, index) in table.players" class="player" :style="playerGridStyle(index, player)">
-            <div class="player-inner" :class="{ 'player-active': player?.id === actingPlayer?.id }">
-                <div class="player-turn"></div>
-                <div class="player-name">{{ player.name }}</div>
-                <div class="dealer" v-if="table.round?.rules.button === player.id">Dealer</div>
-                <div class="blind" v-else-if="table.round?.blinds[player.id]">{{ table.round?.blinds[player.id]?.name }}</div>
-                <div>\${{ player.worth }}</div>
-                <div class="badge urgent" v-if="player.left">Left game</div>
-                <div class="badge" v-else="getPlayerData(player.id)?.action">{{ActionText[getPlayerData(player.id)?.action]}} <template v-if="getPlayerData(player.id)?.bet">\${{getPlayerData(player.id)?.bet}}</template></div>
-                <div class="deck-short">
-                    <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" class="card" :class="{ empty: !card, flipped: card && !card.value }">
-                        <div class="front" :style="cardUrl(card)"></div>
-                        <div class="back"></div>
+                <div class="player-inner" :class="{ 'player-active': player?.id === actingPlayer?.id }">
+                    <div class="player-turn"></div>
+                    <div class="player-name">{{ player.name }}</div>
+                    <div class="dealer" v-if="table.round?.rules.button === player.id">Dealer</div>
+                    <div class="blind" v-else-if="table.round?.blinds[player.id]">{{
+                    table.round?.blinds[player.id]?.name }}</div>
+                    <div>\${{ player.worth }}</div>
+                    <div class="badge urgent" v-if="player.left">Left game</div>
+                    <div class="badge" v-else="getPlayerData(player.id)?.action">
+                        {{ActionText[getPlayerData(player.id)?.action]}} <template v-if="getPlayerData(player.id)?.bet">\${{getPlayerData(player.id)?.bet}}</template></div>
+                    <div class="deck-short">
+                        <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" class="card" :class="{ empty: !card, flipped: card && !card.value }">
+                            <div class="front" :style="cardUrl(card)"></div>
+                            <div class="back"></div>
+                        </div>
+                        <template v-else>
+                            <div class="card empty"></div>
+                            <div class="card empty"></div>
+                        </template>
                     </div>
-                    <template v-else>
-                        <div class="card empty"></div>
-                        <div class="card empty"></div>
-                    </template>
-                </div>
 
-                <div class="player-actions" v-if="table.player?.id === player.id || showDebug">
-                    <div>
-                        <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CHECK')" @click="sendAction(table.player.id, 'CHECK')">Check</button>
-                        <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CALL')" @click="sendAction(table.player.id, 'CALL', { value: table.round?.betSize })">Call <template v-if="table.round?.betSize">\${{ table.round?.betSize }}</template></button>
-                    </div>
-                    <div>
-                        <input class="small" type="number" v-model="input" :disabled="!table?.round?.actingPlayerActions.includes('RAISE') && !table?.round?.actingPlayerActions.includes('BET')">
-                        <button class="button small primary" v-if="table?.round?.actingPlayerActions.includes('BET')" @click="sendAction(table.player.id, 'BET', { value: +input })">Bet</button>
-                        <button class="button small primary" :disabled="!table?.round?.actingPlayerActions.includes('RAISE')" @click="sendAction(table.player.id, 'RAISE', { value: +input })">Raise<template v-if="input"> \${{input}}</template></button>
-                    </div>
-                    <div>
-                        <button class="button small primary" :disabled="!table?.round?.actingPlayerActions.includes('ALL_IN')" @click="sendAction(table.player.id, 'ALL_IN', { value: player.worth })">All In <template v-if="player.worth">\${{ player.worth }}</template></button>
-                        <button class="button small destructive" :disabled="!table?.round?.actingPlayerActions.includes('FOLD')" @click="sendAction(table.player.id, 'FOLD')">Fold</button>
+                    <div class="player-actions" v-if="table.player?.id === player.id || showDebug">
+                        <div>
+                            <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CHECK')" @click="sendAction(table.player.id, 'CHECK')">Check</button>
+                            <button class="button small secondary" :disabled="!table?.round?.actingPlayerActions.includes('CALL')" @click="sendAction(table.player.id, 'CALL', { value: table.round?.betSize })">Call
+                                <template v-if="table.round?.betSize">\${{ table.round?.betSize }}</template></button>
+                        </div>
+                        <div>
+                            <input class="small" type="number" v-model="input" :disabled="!table?.round?.actingPlayerActions.includes('RAISE') && !table?.round?.actingPlayerActions.includes('BET')">
+                            <button class="button small primary" v-if="table?.round?.actingPlayerActions.includes('BET')" @click="sendAction(table.player.id, 'BET', { value: +input })">Bet</button>
+                            <button class="button small primary" :disabled="!table?.round?.actingPlayerActions.includes('RAISE')" @click="sendAction(table.player.id, 'RAISE', { value: +input })">Raise<template v-if="input">
+                                    \${{input}}</template></button>
+                        </div>
+                        <div>
+                            <button class="button small primary" :disabled="!table?.round?.actingPlayerActions.includes('ALL_IN')" @click="sendAction(table.player.id, 'ALL_IN', { value: player.worth })">All In <template
+                                    v-if="player.worth">\${{ player.worth }}</template></button>
+                            <button class="button small destructive" :disabled="!table?.round?.actingPlayerActions.includes('FOLD')" @click="sendAction(table.player.id, 'FOLD')">Fold</button>
+                        </div>
                     </div>
                 </div>
-            </div>
             </div>
             <div class="details">
                 <div class="details-inner">
-                    <div>{{ table.round?.progress }}</div>
-                    <div v-if="actingPlayer">{{actingPlayer.name}} thinking...</div>
                     <div class="table-actions">
                         <button @click="sendAction(null, 'ROUND_START')">Start Round</button>
                         <button @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
                         <button @click="sendAction(null, 'ROUND_END')">End Round</button>
                     </div>
-                    <div class="card flipped deck-top">
-                        <div class="front"></div>
-                        <div class="back"></div>
-                    </div>
-                    <div>
-                        <div v-if="table.round?.potSize && !table.round?.results" class="badge warning pot-size">Pot \${{table.round?.potSize}}</div>
-                    </div>
-                    <div>
-                        <div v-if="table.round?.betSize && !table.round?.results" class="badge">Bet \${{table.round?.betSize}}</div>
-                    </div>
+                    <div class="table-summary">
+                        <div>
+                            <div class="card flipped deck-top">
+                                <div class="front"></div>
+                                <div class="back"></div>
+                                <div>{{ table.round?.progress }}</div>
+                            </div>
+                        </div> 
+                        <div class="details-bets">
+                            <div v-if="table.round?.potSize && !table.round?.results" class="badge warning pot-size">Pot
+                                \${{table.round?.potSize}}</div>
+                            <div v-if="table.round?.betSize && !table.round?.results" class="badge">Bet
+                                \${{table.round?.betSize}}</div>
+                            <div class="results" v-if="table.round && table.round.results" v-for="(pot, index) in table.round.results">
+                                <div class="badge warning">\${{pot.total}} Pot</div>
+                                <span class="badge">&nbsp;{{Object.keys(pot.winnings).map(winner => getPlayer(winner)?.name).join(', ')}}
+                                    <template v-if="Object.keys(pot.winnings).length === 1">wins</template><template v-else>all
+                                        win \${{Object.values(pot.winnings)[0]}}</template> ({{Object.keys(pot.participants).map(player => getPlayer(player)?.name).join(' v ')}})</span>
+                            </div>
+                        </div>
 
-                    <div class="results" v-if="table.round && table.round.results" v-for="(pot, index) in table.round.results">
-                        <div class="badge warning">Pot \${{pot.total}}</div> <span v-for="([player, hand], index) in Object.entries(pot.participants)"><template v-if="index"> v </template><span class="badge" :class="{ positive: pot.winnings[player], negative: !pot.winnings[player] }">{{getPlayer(player)?.name}}<template v-if="pot.winnings[player]"> wins</template> with a {{hand.type.name.toLowerCase()}}</span></span>
+                        <div>
+                            <div class="log">
+                                <div class="fade">
+                                    <div class="badge log-next" v-if="actingPlayer">{{actingPlayer.name}}'s turn</div>
+                                    <transition-group name="log" tag="div" class="log-items">
+                                        <div class="badge" v-for="log in table.round?.log.slice(-6).reverse()" :key="log.id">{{log.player?.name}} {{log.action?.type}} {{log.action?.data?.value}}</div>
+                                    </transition-group>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div v-if="showDebug">
@@ -225,27 +268,28 @@ createApp({
                             </div>
                         </div>
                         <div class="actions">
-                            <div class="action" v-if="table && table.round" v-for="log in table.round.log">{{ log?.player?.name }} {{ log?.action?.type }} {{ log?.action?.data?.value }}</div>
+                            <div class="action" v-if="table && table.round" v-for="log in table.round.log">{{
+                            log?.player?.name }} {{ log?.action?.type }} {{ log?.action?.data?.value }}</div>
                         </div>
                     </div>
                 </div>
             </div>
             <div class="community-cards">
                 <div class="community-cards-inner">
-                    <div v-for="(card, index) in communityCards" class="card" :class="{ empty: !card, flipped: card && !card.value }">
+                    <div v-for="(card, index) in communityCards" class="card" :class="{ empty: !card, flipped: !showCard.communityCards[index] || !card?.value }">
                         <div class="front" :style="cardUrl(card)"></div>
                         <div class="back"></div>
                     </div>
                 </div>
             </div>
         </div>
-        
+
         <details v-if="showDebug">
             <summary>Json</summary>
             <pre>{{tableString}}</pre>
         </details>
     </div>
-    </div>
+
     `
 }).mount('#app');
 

@@ -279,6 +279,7 @@ interface Pot {
 }
 
 interface LogItem {
+	id: string
 	state: RoundState
 	player: Player | null
 	action: Action
@@ -304,7 +305,7 @@ interface PlayerData {
 
 type RoundState = string;
 
-class Round {
+class Round extends EventEmitter {
 	id: string
 	communityCards: Cards
 	deck: Cards
@@ -322,6 +323,8 @@ class Round {
 	static State: Record<string, RoundState>
 
 	constructor(players: Player[], rules: Rules) {
+		super();
+
 		if(players.length <= 0) throw new Error(`Can't start a round with no players`);
 
 		this.id = cuid();
@@ -419,7 +422,7 @@ class Round {
 
 	record(player: Player | null, action: Action) {
 		const time = (new Date()).toISOString();
-		this.log.push({ state: this.progress, player: player, action: action, time: time, step: this.log.length });
+		this.log.push({ id: cuid(), state: this.progress, player: player, action: action, time: time, step: this.log.length });
 		console.log(`${colors.magenta(time)}: ${ player ? `${player.name}` : `dealer`} ${colors.green.bold(action.type)} (${this.communityCards.count() ? `table: ${this.communityCards.toString()}, ` : ''}players: ${this.players.map(player => `${player.name} ${this.playersData[player.id].cards?.toString()}`).join(', ')}${colors.bgBlack.white(`)`)}`);
 	}
 
@@ -639,31 +642,26 @@ class Round {
 		this.actingPlayer = null;
 		this.results = this.generateResults();
 
+		// Distribute winnings 
+		// console.log('winnings', this.results);
+		// this.results.forEach(pot => {
+		// 	Object.entries(pot.winnings).forEach(([playerId, amount]) => {
+		// 		console.log('distributing', playerId, amount);
+		// 		const player = this.getPlayer(playerId);
+		// 		if(player) player.worth += amount;
+		// 	});
+		// })
+
 		this.progress = Round.State.ENDED;
 
 		this.record(null, new Action(Action.Type.ROUND_END));
+
+		this.emit('ended', { results: this.results });
 	}
 
 	hasEnded() {
 		return this.progress === Round.State.ENDED;
 	}
-
-	// getPots() {
-	// 	// TODO: handle side pots
-	// 	return [{
-	// 		total: this.getPotSize(),
-	// 		participants: this.rankPlayers()
-	// 	}];
-	// }
-
-	// getWinners() {
-	// 	if(this.players.length === 0) return null;
-	// 	var ranked = this.rankPlayers(),
-	// 		winner = ranked[0], // we know this is a winner
-	// 		winners = ranked.filter(rank => Hand.compare(winner.hand, rank.hand) === 0); // find all winners
-
-	// 	return winners;
-	// }
 
 	getBetSize() {
 		const betValues = this.players.map(player => this.playersData[player.id].bet);
@@ -745,9 +743,12 @@ class Round {
 			previous = [playerId, hand];
 		});
 
+		// Rank folded players lowest
+		Object.values(this.playersData).filter(data => data.action === Action.Type.FOLD).forEach(data => overallRankings[data.player] = rank + 1);
+
 		// Calculate pot divisions
 		let previousBetSize = 0;
-		let includedPlayers = [...this.players];
+		let includedPlayers = Object.values(this.playersData).filter(data => data.bet > 0).map(data => data.player);//[...this.players];
 		
 		let pots : Pot[] = [];
 		let bets = Object.values(this.playersData).map(data => data.bet);
@@ -760,17 +761,29 @@ class Round {
 
 			const currentBetSize = Math.min(...this.players.map(player => this.playersData[player.id].bet).filter(bet => bet > previousBetSize));
 			
-			const winnerRank = Math.min(...includedPlayers.map(player => overallRankings[player.id]));
-			const winningPlayers = includedPlayers.filter(player => winnerRank === overallRankings[player.id]);
+			const winnerRank = Math.min(...includedPlayers.map(playerId => overallRankings[playerId]));
+			const winningPlayers = includedPlayers.filter(playerId => winnerRank === overallRankings[playerId] && this.playersData[playerId]?.action !== Action.Type.FOLD);
 
-			includedPlayers.forEach(player => {
-				rankings[player.id] = overallRankings[player.id];
-				participants[player.id] = playerHands[player.id];
+			includedPlayers.forEach(playerId => {
+				rankings[playerId] = overallRankings[playerId];
+				participants[playerId] = playerHands[playerId];
 			});
 
+			// Calculate total amount won
 			const total = bets.map(bet => bet - previousBetSize).filter(bet => bet > 0).reduce((acc, value) => acc + value, 0);
-			winningPlayers.forEach(player => {
-				winnings[player.id] = Math.floor(total / winningPlayers.length); // TODO: fractions should go to player closest to dealer
+			winningPlayers.forEach(playerId => {
+				winnings[playerId] = Math.floor(total / winningPlayers.length); // TODO: fractions should go to player closest to dealer
+			});
+
+			// Remove bet amount from winnings
+			Object.entries(this.playersData).forEach(([playerId, data]) => {
+				if(data.bet) {
+					if(winnings[playerId]) {
+						winnings[playerId] -= data.bet;
+					} else {
+						winnings[playerId] = -data.bet;
+					}
+				}
 			});
 
 			pots.push({
@@ -781,7 +794,7 @@ class Round {
 			});
 
 			previousBetSize = currentBetSize;
-			includedPlayers = this.players.filter(player => this.playersData[player.id].bet > currentBetSize);
+			includedPlayers = Object.values(this.playersData).filter(data => this.playersData[data.player].bet > currentBetSize).map(data => data.player);
 		}
 
 		return pots;
@@ -896,8 +909,9 @@ class Table extends EventEmitter {
 		this.rules.button = this.rules.button ? this.getNextPlayer(this.rules.button) : this.players[0].id;
 		this.players = this.players.filter(player => !player.left);
 		this.round = new Round(this.players, this.rules);
-		
 
+		this.round.on('ended', (data : { results: Pot[] }) => this.finaliseRound(data));
+		
 		this.emit('started');
 	}
 
@@ -917,22 +931,24 @@ class Table extends EventEmitter {
 	endRound() {
 		if(!this.round) throw new Error('Attempted to end a round but no round exists.');
 		this.round.end();
-
-		this.emit('ended');
 	}
-
+	
 	isRoundComplete() {
 		if(!this.round) return true;
 		return this.round.hasEnded();
 	}
 
-	// getRoundWinners() {
-	// 	if(!this.round) throw new Error('Attempted to get round winners but no round exists.');
-	// 	return this.round.getWinners();
-	// }
-
-	completeRound() {
-		
+	finaliseRound({ results } : { results: Pot[] }) {
+		// Distribute winnings
+		console.log('winnings', results);
+		results.forEach(pot => {
+			Object.entries(pot.winnings).forEach(([playerId, amount]) => {
+				console.log('distributing', playerId, amount);
+				const player = this.getPlayer(playerId);
+				if(player) player.worth += amount;
+			});
+		})
+		this.emit('ended');
 	}
 
 	join(player: Player) {
@@ -972,22 +988,9 @@ class Table extends EventEmitter {
 		if(this.round) console.log(`Table: ${this.round.communityCards.getSorted().toString()}`);
 	}
 
-	// logRanked() {
-	// 	if(!this.round) throw new Error('Attempted to log ranked players but no round exists.');
-	// 	console.log('--Ranked');
-	// 	var ranked = this.round.rankPlayers();
-	// 	ranked.forEach(rank => {
-	// 		console.log(`${rank.id} is rank ${rank.rank}`);
-	// 	});
-	// }
-
-	// logWinners() {
-	// 	console.log('--Winners');
-	// 	var winners = this.getRoundWinners();
-	// 	(winners || []).forEach(rank => {
-	// 		console.log(`${rank.id} (${rank.hand?.type?.name} ${new Cards(rank.hand.hand).toString()})`);
-	// 	});
-	// }
+	getPlayer(playerId: PlayerId) {
+		return this.players.find(player => playerId === player.id);
+	}
 	
 	getNextPlayer(playerId: PlayerId) {
 		const activePlayers = this.players.filter(player => !player.left || player.id === playerId).map(player => player.id);
