@@ -6,7 +6,7 @@ var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 const colors = require('colors');
 
-var { Table, Player, Cards, Action, ValueName, SuitName, getPartialKnowledge } = require('./poker');
+var { Table, Player } = require('./poker');
 
 var table = new Table('test');
 
@@ -15,7 +15,7 @@ let playerConnections = {};
 function broadcastStatus({exclude = []} = { exclude: []}) {
   Object.entries(playerConnections).filter(([playerId, connection]) => !exclude.includes(playerId)).forEach(([playerId, connection]) => {
     console.log('status to', playerId);
-    connection.emit('status', getPartialKnowledge(playerId, table));
+    connection.emit('status', Table.getTablePartial(playerId, table));
   });
 }
 
@@ -56,7 +56,7 @@ app.get('/', function(req, res, next) {
 
 app.get('/status', function(req, res) {
   res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify(getPartialKnowledge(req.query.player ? table.players[req.query.player] : null, table)));
+  res.end(JSON.stringify(Table.getTablePartial(req.query.player ? table.players[req.query.player] : null, table)));
 });
 
 app.post('/action', function(req, res) {
@@ -119,7 +119,7 @@ app.socketConnection = client => {
     console.log('on action', playerId, action, data);
     try {
       table.act(playerId, { type: action, data });
-      acknowledge(getPartialKnowledge(player.id, table));
+      acknowledge(Table.getTablePartial(player.id, table));
       broadcastStatus({ exclude: [player.id] });
     } catch(e) {
       console.error(colors.red.bold(e.message));

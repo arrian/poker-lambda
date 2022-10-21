@@ -240,11 +240,11 @@ createApp({
                                 \${{table.round?.potSize}}</div>
                             <div v-if="table.round?.betSize && !table.round?.results" class="badge">Bet
                                 \${{table.round?.betSize}}</div>
-                            <div class="results" v-if="table.round && table.round.results" v-for="(pot, index) in table.round.results">
+                            <div class="results" v-if="table.round?.results" v-for="(pot, index) in table.round.results?.pots">
                                 <div class="badge warning">\${{pot.total}} Pot</div>
                                 <span class="badge">&nbsp;{{Object.keys(pot.winnings).map(winner => getPlayer(winner)?.name).join(', ')}}
                                     <template v-if="Object.keys(pot.winnings).length === 1">wins</template><template v-else>all
-                                        win \${{Object.values(pot.winnings)[0]}}</template> ({{Object.keys(pot.participants).map(player => getPlayer(player)?.name).join(' v ')}})</span>
+                                        win \${{Object.values(pot.winnings)[0]}}</template> ({{pot.players.map(player => getPlayer(player)?.name).join(' v ')}})</span>
                             </div>
                         </div>
 
@@ -253,7 +253,7 @@ createApp({
                                 <div class="fade">
                                     <div class="badge log-next" v-if="actingPlayer">{{actingPlayer.name}}'s turn</div>
                                     <transition-group name="log" tag="div" class="log-items">
-                                        <div class="badge" v-for="log in table.round?.log.slice(-6).reverse()" :key="log.id">{{log.player?.name}} {{log.action?.type}} {{log.action?.data?.value}}</div>
+                                        <div class="badge" v-for="log in table.log.slice(-6).reverse()" :key="log.id">{{log.player?.name}} {{log.action?.type}} {{log.action?.data?.value}}</div>
                                     </transition-group>
                                 </div>
                             </div>

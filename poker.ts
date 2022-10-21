@@ -209,10 +209,6 @@ class Player {
 
 		this.left = false;
 	}
-
-	log() {
-		console.log(`${this.name}`);
-	}
 }
 
 interface ActionData {
@@ -271,27 +267,25 @@ interface Rules {
 	raiseMinimum: boolean // only allow raises above previous raise increments
 }
 
+interface RoundResult {
+	players: Record<PlayerId, Hand>
+	pots: Pot[]
+}
+
 interface Pot {
-	participants: Record<PlayerId, Hand>
+	players: PlayerId[]
 	total: number
 	rankings: Record<PlayerId, number>
 	winnings: Record<PlayerId, number>
+	losses: Record<PlayerId, number>
 }
 
 interface LogItem {
 	id: string
-	state: RoundState
 	player: Player | null
 	action: Action
 	time: string
-	step: number
 }
-
-// interface PlayerResult {
-// 	id: string
-// 	hand: Hand
-// 	rank?: number
-// }
 
 // Round specific player data
 interface PlayerData {
@@ -305,6 +299,18 @@ interface PlayerData {
 
 type RoundState = string;
 
+function createLogItem(player: Player | null, action: Action) : LogItem {
+		const time = (new Date()).toISOString();
+		const logItem = {
+			id: cuid(),
+			player: player,
+			action: action,
+			time: time
+		};
+		// console.log(`${colors.magenta(time)}: ${ player ? `${player.name}` : `dealer`} ${colors.green.bold(action.type)} (${this.communityCards.count() ? `table: ${this.communityCards.toString()}, ` : ''}players: ${this.players.map(player => `${player.name} ${this.playersData[player.id].cards?.toString()}`).join(', ')}${colors.bgBlack.white(`)`)}`);
+		return logItem;
+}
+
 class Round extends EventEmitter {
 	id: string
 	communityCards: Cards
@@ -314,9 +320,8 @@ class Round extends EventEmitter {
 	actingPlayer?: PlayerId | null
 	rules: Rules
 	pots: Array<Pot>
-	log: Array<LogItem>
 	progress: RoundState
-	results: Pot[] | null
+	results: RoundResult | null
 	betIncrement: number
 	blinds: Record<PlayerId, RuleBlind>
 
@@ -324,8 +329,6 @@ class Round extends EventEmitter {
 
 	constructor(players: Player[], rules: Rules) {
 		super();
-
-		if(players.length <= 0) throw new Error(`Can't start a round with no players`);
 
 		this.id = cuid();
 
@@ -359,6 +362,11 @@ class Round extends EventEmitter {
 		this.blinds = {};
 
 		this.progress = Round.State.STARTING;
+	}
+
+	start() {
+		if(this.players.length <= 0) throw new Error(`Can't start a round with no players`);
+
 		this.record(null, new Action(Action.Type.STARTED));
 
 		this.deal();
@@ -421,9 +429,8 @@ class Round extends EventEmitter {
 	}
 
 	record(player: Player | null, action: Action) {
-		const time = (new Date()).toISOString();
-		this.log.push({ id: cuid(), state: this.progress, player: player, action: action, time: time, step: this.log.length });
-		console.log(`${colors.magenta(time)}: ${ player ? `${player.name}` : `dealer`} ${colors.green.bold(action.type)} (${this.communityCards.count() ? `table: ${this.communityCards.toString()}, ` : ''}players: ${this.players.map(player => `${player.name} ${this.playersData[player.id].cards?.toString()}`).join(', ')}${colors.bgBlack.white(`)`)}`);
+		const logItem = createLogItem(player, action);
+		this.emit('log', logItem);
 	}
 
 	act(player: Player, action: Action) {
@@ -642,21 +649,11 @@ class Round extends EventEmitter {
 		this.actingPlayer = null;
 		this.results = this.generateResults();
 
-		// Distribute winnings 
-		// console.log('winnings', this.results);
-		// this.results.forEach(pot => {
-		// 	Object.entries(pot.winnings).forEach(([playerId, amount]) => {
-		// 		console.log('distributing', playerId, amount);
-		// 		const player = this.getPlayer(playerId);
-		// 		if(player) player.worth += amount;
-		// 	});
-		// })
-
 		this.progress = Round.State.ENDED;
 
 		this.record(null, new Action(Action.Type.ROUND_END));
 
-		this.emit('ended', { results: this.results });
+		this.emit('ended', this.results);
 	}
 
 	hasEnded() {
@@ -719,7 +716,7 @@ class Round extends EventEmitter {
 		return this.playersData[player.id].bet === player.worth;
 	}
 
-	generateResults() : Pot[] {
+	generateResults() : RoundResult {
 		// Determine player hand result
 		const playerHands : Record<PlayerId, Hand> = {};
 		this.players.forEach(player => playerHands[player.id] = new Hand(this.playersData[player.id].cards, this.communityCards));
@@ -755,8 +752,9 @@ class Round extends EventEmitter {
 		
 
 		while(includedPlayers.length > 1) {
-			let participants : Record<PlayerId, Hand> = {};
+			// let participants : Record<PlayerId, Hand> = {};
 			let winnings : Record<PlayerId, number> = {};
+			let losses : Record<PlayerId, number> = {};
 			let rankings : Record<PlayerId, number> = {};
 
 			const currentBetSize = Math.min(...this.players.map(player => this.playersData[player.id].bet).filter(bet => bet > previousBetSize));
@@ -766,7 +764,7 @@ class Round extends EventEmitter {
 
 			includedPlayers.forEach(playerId => {
 				rankings[playerId] = overallRankings[playerId];
-				participants[playerId] = playerHands[playerId];
+				// participants[playerId] = playerHands[playerId];
 			});
 
 			// Calculate total amount won
@@ -775,20 +773,21 @@ class Round extends EventEmitter {
 				winnings[playerId] = Math.floor(total / winningPlayers.length); // TODO: fractions should go to player closest to dealer
 			});
 
-			// Remove bet amount from winnings
+			// Calculate total amount lost
 			Object.entries(this.playersData).forEach(([playerId, data]) => {
 				if(data.bet) {
-					if(winnings[playerId]) {
-						winnings[playerId] -= data.bet;
+					if(losses[playerId]) {
+						losses[playerId] -= data.bet;
 					} else {
-						winnings[playerId] = -data.bet;
+						losses[playerId] = -data.bet;
 					}
 				}
 			});
 
 			pots.push({
-				participants,
+				players: includedPlayers,
 				winnings,
+				losses,
 				rankings,
 				total
 			});
@@ -797,29 +796,11 @@ class Round extends EventEmitter {
 			includedPlayers = Object.values(this.playersData).filter(data => this.playersData[data.player].bet > currentBetSize).map(data => data.player);
 		}
 
-		return pots;
+		return {
+			players: playerHands,
+			pots
+		};
 	}
-
-	// rankPlayers() : PlayerResult[] {
-	// 	const players : PlayerResult[] = this.players.map(player => ({
-	// 		id: player.id,
-	// 		hand: new Hand(this.playersData[player.id].cards, this.communityCards)
-	// 	})).sort((left, right) => Hand.compare(left.hand, right.hand)).reverse();
-
-	// 	let previousPlayer: PlayerResult | null = null;
-	// 	players.forEach(player => {
-	// 		if(!previousPlayer) {
-	// 			player.rank = 1;
-	// 		} else if(Hand.compare(player.hand, previousPlayer.hand) === 0) {
-	// 			player.rank = previousPlayer.rank;
-	// 		} else {
-	// 			player.rank = previousPlayer.rank ? previousPlayer.rank + 1 : 1;
-	// 		}
-	// 		previousPlayer = player;
-	// 	});
-
-	// 	return players;
-	// }
 
 	removePlayer(player : Player) {
 		const resolveActingPlayer = this.actingPlayer === player.id;
@@ -849,6 +830,40 @@ Round.State = {
 };
 
 
+// Partial knowledge round
+interface RoundPartial {
+	id: string
+	communityCards: Cards
+	deck: Cards
+	players: Player[]
+	playersData: Record<PlayerId, PlayerData>
+	actingPlayer?: PlayerId | null,
+	actingPlayerActions: ActionType[]
+	rules: Rules
+	pots: Array<Pot>
+	progress: RoundState
+	results: RoundResult | null
+	potSize: number
+	betSize: number
+	blinds: Record<PlayerId, RuleBlind>
+}
+
+// Partial knowledge table 
+interface TablePartial {
+	id: string
+	name: string
+	players: Player[]
+	round: RoundPartial | null
+	rules: Rules,
+	log: Array<LogItem>
+	ValueName: Record<string, string>,
+	SuitName: Record<string, string>,
+	player: Player | null | undefined
+}
+
+interface TableSerialized {
+	name: string
+}
 
 class Table extends EventEmitter {
 	id: string
@@ -856,6 +871,7 @@ class Table extends EventEmitter {
 	players: Player[]
 	round: Round | null
 	rules: Rules
+	log: Array<LogItem>
 
 	constructor(name: string) {
 		super();
@@ -864,6 +880,7 @@ class Table extends EventEmitter {
 		this.name = name;
 		this.players = [];
 		this.round = null;
+		this.log = [];
 
 		this.rules = {
 			ante: 10,
@@ -901,6 +918,11 @@ class Table extends EventEmitter {
 
 	}
 
+	record(player: Player | null, action: Action) {
+		const logItem = createLogItem(player, action);
+		this.log.push(logItem);
+	}
+
 	startRound() {
 		if(this.players.length < 2) {
 			throw new Error(`Can't start round with fewer than 2 players`);
@@ -910,7 +932,10 @@ class Table extends EventEmitter {
 		this.players = this.players.filter(player => !player.left);
 		this.round = new Round(this.players, this.rules);
 
-		this.round.on('ended', (data : { results: Pot[] }) => this.finaliseRound(data));
+		this.round.on('log', (logItem : LogItem) => this.log.push(logItem));
+		this.round.on('ended', (results : RoundResult) => this.finaliseRound(results));
+
+		this.round.start();
 		
 		this.emit('started');
 	}
@@ -938,12 +963,11 @@ class Table extends EventEmitter {
 		return this.round.hasEnded();
 	}
 
-	finaliseRound({ results } : { results: Pot[] }) {
+	finaliseRound(results: RoundResult) {
 		// Distribute winnings
 		console.log('winnings', results);
-		results.forEach(pot => {
-			Object.entries(pot.winnings).forEach(([playerId, amount]) => {
-				console.log('distributing', playerId, amount);
+		results.pots.forEach(pot => {
+			[...Object.entries(pot.winnings), ...Object.entries(pot.losses)].forEach(([playerId, amount]) => {
 				const player = this.getPlayer(playerId);
 				if(player) player.worth += amount;
 			});
@@ -958,6 +982,8 @@ class Table extends EventEmitter {
 		if(!this.rules.button) {
 			this.rules.button = player.id;
 		}
+
+		this.record(player, new Action(Action.Type.JOIN));
 
 		this.emit('joined');
 	}
@@ -975,17 +1001,14 @@ class Table extends EventEmitter {
 			this.players = this.players.filter(player => !player.left);
 		}
 
+		this.record(player, new Action(Action.Type.LEAVE));
+
 		this.emit('left');
 	}
 
 	getActingPlayer() {
 		if(this.round) return this.round.getActingPlayer();
 		return null;
-	}
-
-	log() {
-		this.players.forEach(player => player.log());
-		if(this.round) console.log(`Table: ${this.round.communityCards.getSorted().toString()}`);
 	}
 
 	getPlayer(playerId: PlayerId) {
@@ -997,97 +1020,49 @@ class Table extends EventEmitter {
 		const index = activePlayers.findIndex(id => id === playerId);
 		return activePlayers[index + 1 >= activePlayers.length ? 0 : index + 1];
 	}
-}
 
-// Partial knowledge round
-interface RoundPartial {
-	id: string
-	communityCards: Cards
-	deck: Cards
-	players: Player[]
-	playersData: Record<PlayerId, PlayerData>
-	actingPlayer?: PlayerId | null,
-	actingPlayerActions: ActionType[]
-	rules: Rules
-	pots: Array<Pot>
-	log: Array<LogItem>
-	progress: RoundState
-	results: Pot[] | null
-	potSize: number
-	betSize: number
-	blinds: Record<PlayerId, RuleBlind>
-}
+	static getPlayersDataPartial(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
+		const playersDataResult : Record<PlayerId, PlayerData> = {};
+		Object.entries(playersData).forEach(([key, value]) => {
+			console.log('entry', key, value);
+			if(!player || key === player.id) {
+				playersDataResult[key] = value;
+			} else {
+				playersDataResult[key] = {
+					...value,
+					cards: round.hasEnded() && round.isActivePlayer(key) ? value.cards : Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand unless ended
+				};
+			}
+		});
+		return playersDataResult;
+	}
 
-// Partial knowledge table 
-interface TablePartial {
-	id: string
-	name: string
-	players: Player[]
-	round: RoundPartial | null
-	rules: Rules,
-	ValueName: Record<string, string>,
-	SuitName: Record<string, string>,
-	player: Player | null | undefined
-}
+	/**
+	 * Get subset of the table based on what a player knows.
+	 *  
+	 * @param playerId Target player id
+	 * @param table Source table data
+	 * @returns Partial knowledge table information
+	 */
+	static getTablePartial(playerId: PlayerId | null, table: Table) : TablePartial {
+		const player = playerId ? table.round?.getPlayer(playerId) : null;
 
-function getPartialKnowledgePlayersData(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
-	const playersDataResult : Record<PlayerId, PlayerData> = {};
-	Object.entries(playersData).forEach(([key, value]) => {
-		console.log('entry', key, value);
-		if(!player || key === player.id) {
-			playersDataResult[key] = value;
-		} else {
-			playersDataResult[key] = {
-				...value,
-				cards: round.hasEnded() && round.isActivePlayer(key) ? value.cards : Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand unless ended
-			};
+		return {
+			...table,
+			round: table.round ? {
+				...table.round,
+				actingPlayerActions: player ? table.round.getValidActions(player) : [],
+				deck: player ? new Cards() : table.round.deck, // dealer deck is not known
+				playersData: player ? Table.getPlayersDataPartial(player, table.round.playersData, table.round) : table.round.playersData,
+				potSize: table.round.getPotSize(),
+				betSize: table.round.getBetSize()
+			} : null,
+			ValueName,
+			SuitName,
+			player: player
 		}
-	});
-	return playersDataResult;
-}
-
-function getPartialKnowledge(playerId: PlayerId | null, table: Table) : TablePartial {
-	const player = playerId ? table.round?.getPlayer(playerId) : null;
-
-	return {
-		...table,
-		round: table.round ? {
-			...table.round,
-			actingPlayerActions: player ? table.round.getValidActions(player) : [],
-			deck: player ? new Cards() : table.round.deck, // dealer deck is not known
-			playersData: player ? getPartialKnowledgePlayersData(player, table.round.playersData, table.round) : table.round.playersData,
-			potSize: table.round.getPotSize(),
-			betSize: table.round.getBetSize()
-		} : null,
-		ValueName,
-		SuitName,
-		player: player
-	}
-}
-
-class Casino {
-	name: string
-	tables: Table[]
-	players: Player[]
-
-	constructor(name: string) {
-		this.name = name;
-		this.tables = [];
-		this.players = [];
-
 	}
 
-	createTable(name: string) {
-		const table = new Table(name);
-		this.tables.push(table);
-		return table;
-	}
-
-	createPlayer(name: string) {
-		const player = new Player(name);
-		this.players.push(player);
-		return player;
-	}
 }
 
 module.exports = {
@@ -1101,6 +1076,5 @@ module.exports = {
 	Round,
 	Table,
 	SuitName,
-	ValueName,
-	getPartialKnowledge
+	ValueName
 };
