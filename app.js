@@ -6,7 +6,7 @@ var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 const colors = require('colors');
 
-var { Table, Player } = require('./poker');
+var { Table, Player } = require('./src/poker');
 
 var table = new Table('test');
 
@@ -15,7 +15,7 @@ let playerConnections = {};
 function broadcastStatus({exclude = []} = { exclude: []}) {
   Object.entries(playerConnections).filter(([playerId, connection]) => !exclude.includes(playerId)).forEach(([playerId, connection]) => {
     console.log('status to', playerId);
-    connection.emit('status', Table.getTablePartial(playerId, table));
+    connection.emit('status', Table.serializePartial(playerId, table));
   });
 }
 
@@ -29,8 +29,6 @@ table.on('left', () => {
   broadcastStatus();
 });
 
-var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
 const { resourceLimits } = require('worker_threads');
 
 var app = express();
@@ -44,8 +42,6 @@ app.use(bodyParser.json());
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// app.use('/', indexRouter);
-app.use('/users', usersRouter);
 
 app.get('/', function(req, res, next) {
   res.render('index', {
@@ -56,7 +52,7 @@ app.get('/', function(req, res, next) {
 
 app.get('/status', function(req, res) {
   res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify(Table.getTablePartial(req.query.player ? table.players[req.query.player] : null, table)));
+  res.end(JSON.stringify(Table.serializePartial(req.query.player ? table.players[req.query.player] : null, table)));
 });
 
 app.post('/action', function(req, res) {
@@ -119,7 +115,7 @@ app.socketConnection = client => {
     console.log('on action', playerId, action, data);
     try {
       table.act(playerId, { type: action, data });
-      acknowledge(Table.getTablePartial(player.id, table));
+      acknowledge(Table.serializePartial(player.id, table));
       broadcastStatus({ exclude: [player.id] });
     } catch(e) {
       console.error(colors.red.bold(e.message));
@@ -129,10 +125,9 @@ app.socketConnection = client => {
 
   client.on('disconnect', () => {
     console.log('disconnect');
-    delete playerConnections[player.id];
     try {
       table.leave(player);
-      broadcastStatus();
+      delete playerConnections[player.id];
     } catch(e) {
       console.error(colors.red.bold(e.message));
       console.error(colors.red.bold(e.stack));

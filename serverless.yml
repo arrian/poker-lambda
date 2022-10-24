@@ -1,0 +1,62 @@
+service: poker
+frameworkVersion: "3"
+custom:
+  dynamodb:
+    stages:
+      - test
+      - dev
+    start:
+      port: 8001
+      inMemory: true
+      heapInitial: 200m
+      heapMax: 1g
+      migrate: true
+      seed: true
+      convertEmptyValues: true
+
+provider:
+  name: aws
+  runtime: nodejs16.x
+  websocketsApiRouteSelectionExpression: $request.body.action
+
+plugins:
+  - serverless-dynamodb-local
+  - serverless-plugin-existing-s3
+  - serverless-dotenv-plugin
+  - serverless-plugin-typescript
+  - serverless-offline
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: tableId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: tableId
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TableName: pokerTable
+functions:
+  ping:
+    handler: src/functions/handler.ping
+  # startGame:
+  #   handler: src/functions/handler.startGame
+  # getAllGames:
+  #   handler: src/functions/handler.getAllGames
+  # onClientConnected:
+  #   handler: src/functions/handler.onClientConnected
+  # onClientAction:
+  #   handler: src/functions/handler.onClientAction
+  # onClientDisconnected:
+  #   handler: src/functions/handler.onClientDisconnected
+  websocket:
+   handler: src/functions/handler.websocket
+   events:
+     - websocket:
+         route: $connect
+     - websocket:
+         route: $disconnect
+     - websocket:
+         route: $default

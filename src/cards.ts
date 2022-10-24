@@ -42,7 +42,6 @@ export const Value = {
     Ace: 'A'
 };
 
-
 export const SuitName = {
 	'♥': 'hearts',
 	'♠': 'spades',

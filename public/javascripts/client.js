@@ -1,5 +1,3 @@
-// const { table } = require("console");
-
 const { createApp } = Vue;
 
 const ConnectionStatus = {
@@ -40,10 +38,11 @@ createApp({
             connection: ConnectionStatus.Unknown,
             ConnectionStatus,
             ActionText,
-            showCard: {
+            cardState: {
                 communityCards: [false, false, false, false, false],
-                playerCards: [false, false]
-            }
+                playerCards: ['undealt', false]
+            },
+            highlightPlayer: null
         }
     },
     async mounted() {
@@ -68,23 +67,30 @@ createApp({
         communityCards() {
             const cards = this.table?.round?.communityCards?.cards || [];
             return [...cards, ...Array(5 - cards.length).fill(null)];
-        },
-
-        results() {
-            // return this.table.results.map(result => ({
-            //     players: {
-            //         ...result.
-            //     }
-            // }));
         }
     },
     methods: {
+        isCardHighlighted(card) {
+            if(this.highlightPlayer && card && card.value && card.suit) {
+                const hand = this.table?.round?.results?.players[this.highlightPlayer].hand;
+                return hand && hand.filter(handCard => handCard.value === card.value && handCard.suit === card.suit).length;
+            }
+            return false;
+        },
+        isCardHighlightedKicker(card) {
+            if(this.highlightPlayer && card && card.value && card.suit) {
+                const kicker = this.table?.round?.results?.players[this.highlightPlayer].kickers;
+                return kicker && kicker.filter(kickerCard => kickerCard.value === card.value && kickerCard.suit === card.suit).length;
+            }
+            return false;
+        },
         async load() {
             const result = await fetch('/status?player=3').then(response => response.json());
             this.onUpdate(result);
             return result;
         },
         onUpdate(table) {
+            const isInitialLoad = !this.table;
             console.log('onUpdate', table);
             this.table = table;
             this.tableString = JSON.stringify(table, null, 4);
@@ -92,16 +98,20 @@ createApp({
             this.inputs = {};
             this.table.players.forEach(player => this.inputs[player.id] = table.round?.betSize || 0);
 
-            if(this.isAwaitingCommunityCardTransition()) {
+            if(isInitialLoad) {
+                for(let i = 0; i < this.table?.round?.communityCards?.cards.length; i++) {
+                    this.cardState.communityCards[i] = true;
+                }
+            } else if(this.isAwaitingCommunityCardTransition()) {
                 this.startCommunityCardTransition();
             }
         },
         isAwaitingCommunityCardTransition() {
-            return this.showCard.communityCards.filter(show => show).length !== this.table?.round?.communityCards?.cards.length;
+            return this.cardState.communityCards.filter(show => show).length !== this.table?.round?.communityCards?.cards.length;
         },
         flipNextCommunityCard() {
-            const index = this.showCard.communityCards.indexOf(false);
-            if(index >= 0) this.showCard.communityCards[index] = true;
+            const index = this.cardState.communityCards.indexOf(false);
+            if(index >= 0) this.cardState.communityCards[index] = true;
         },
         startCommunityCardTransition() {
             setTimeout(() => {
@@ -109,7 +119,7 @@ createApp({
                 if(this.isAwaitingCommunityCardTransition()) this.startCommunityCardTransition();
             }, 1000);
         },
-        cardUrl(card) {
+        cardStyle(card) {
             if(!card || !card.value || !card.suit) return 'background: none';
             const value = this.table.ValueName[card.value];
             const suit = this.table.SuitName[card.suit];
@@ -154,28 +164,13 @@ createApp({
                 console.log('action response', table);
                 this.onUpdate(table);
             });
-            // const body = {
-            // player,
-            // action,
-            // data: data || {}
-            // };
-
-            // await fetch('/action', {
-            // method: 'POST',
-            // headers: {
-            //     'Content-Type': 'application/json',
-            // },
-            // body: JSON.stringify(body)
-            // });
-
-            // await this.load();
         }
     },
+      // {{ $refs.playerCards }}
     template: `
     <div v-if="table" class="poker container">
         <div class="badge urgent connection" :style="connection === ConnectionStatus.Disconnected ? 'opacity: 1; visibility: visible' : 'opacity: 0; visibility: hidden'">
             Disconnected</div>
-
 
         <div class="table-grid">
             <div v-if="table.players" v-for="(player, index) in table.players" class="player" :style="playerGridStyle(index, player)">
@@ -190,14 +185,18 @@ createApp({
                     <div class="badge" v-else="getPlayerData(player.id)?.action">
                         {{ActionText[getPlayerData(player.id)?.action]}} <template v-if="getPlayerData(player.id)?.bet">\${{getPlayerData(player.id)?.bet}}</template></div>
                     <div class="deck-short">
-                        <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" class="card" :class="{ empty: !card, flipped: card && !card.value }">
-                            <div class="front" :style="cardUrl(card)"></div>
+                        <div v-if="getPlayerData(player.id)?.cards.cards.length" v-for="(card, index) in getPlayerData(player.id)?.cards.cards" ref="playerCards" class="card" :class="{ empty: !card, flipped: card && !card.value, highlight: isCardHighlighted(card), 'highlight-kicker': isCardHighlightedKicker(card) }">
+                            <div class="front" :style="cardStyle(card, player, index)"></div>
                             <div class="back"></div>
+
                         </div>
                         <template v-else>
                             <div class="card empty"></div>
                             <div class="card empty"></div>
                         </template>
+                        <div v-if="table?.round?.results?.players[player.id]" class="player-hand-result" @mouseover="highlightPlayer = player.id" @mouseleave="highlightPlayer = null">
+                            <div class="badge" :class="{warning: player.id === highlightPlayer }">{{ table.round.results.players[player.id].type.name }}</div>
+                        </div>
                     </div>
 
                     <div class="player-actions" v-if="table.player?.id === player.id || showDebug">
@@ -223,9 +222,9 @@ createApp({
             <div class="details">
                 <div class="details-inner">
                     <div class="table-actions">
-                        <button @click="sendAction(null, 'ROUND_START')">Start Round</button>
-                        <button @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
-                        <button @click="sendAction(null, 'ROUND_END')">End Round</button>
+                        <button :disabled="table?.players.filter(player => !player.left).length < 2" @click="sendAction(null, 'ROUND_START')">Start Round</button>
+                        <button :disabled="table?.players.filter(player => !player.left).length < 2" @click="sendAction(null, 'ROUND_NEXT')">Next Round</button>
+                        <button :disabled="!table?.round || table?.round.progress === 'ENDED'" @click="sendAction(null, 'ROUND_END')">End Round</button>
                     </div>
                     <div class="table-summary">
                         <div>
@@ -242,16 +241,17 @@ createApp({
                                 \${{table.round?.betSize}}</div>
                             <div class="results" v-if="table.round?.results" v-for="(pot, index) in table.round.results?.pots">
                                 <div class="badge warning">\${{pot.total}} Pot</div>
-                                <span class="badge">&nbsp;{{Object.keys(pot.winnings).map(winner => getPlayer(winner)?.name).join(', ')}}
-                                    <template v-if="Object.keys(pot.winnings).length === 1">wins</template><template v-else>all
-                                        win \${{Object.values(pot.winnings)[0]}}</template> ({{pot.players.map(player => getPlayer(player)?.name).join(' v ')}})</span>
+
+                                <span v-for="(player, index) in pot.players"><span class="badge" :class="{ warning: pot.winnings[player] }">{{ getPlayer(player)?.name }}<template v-if="pot.winnings[player] && pot.winnings[player] !== pot.total"> (\${{pot.winnings[player]}})</template></span> <template v-if="index + 1 < pot.players.length"> v </template></span>
                             </div>
                         </div>
 
                         <div>
                             <div class="log">
                                 <div class="fade">
-                                    <div class="badge log-next" v-if="actingPlayer">{{actingPlayer.name}}'s turn</div>
+                                    <div class="badge info log-next" v-if="table?.players.length <= 1">Waiting for players...</div>
+                                    <div class="badge info log-next" v-else-if="actingPlayer">{{actingPlayer.name}}'s turn</div>
+                                    <div class="badge info log-next" v-else>Click start...</div>
                                     <transition-group name="log" tag="div" class="log-items">
                                         <div class="badge" v-for="log in table.log.slice(-6).reverse()" :key="log.id">{{log.player?.name}} {{log.action?.type}} {{log.action?.data?.value}}</div>
                                     </transition-group>
@@ -263,7 +263,7 @@ createApp({
                     <div v-if="showDebug">
                         <div class="deck">
                             <div v-if="table && table.round && table.round.deck" v-for="(card, index) in table.round.deck.cards" class="card" :style="cardOverlap(index)">
-                                <div class="front" :style="cardUrl(card)"></div>
+                                <div class="front" :style="cardStyle(card)"></div>
                                 <div class="back"></div>
                             </div>
                         </div>
@@ -276,8 +276,8 @@ createApp({
             </div>
             <div class="community-cards">
                 <div class="community-cards-inner">
-                    <div v-for="(card, index) in communityCards" class="card" :class="{ empty: !card, flipped: !showCard.communityCards[index] || !card?.value }">
-                        <div class="front" :style="cardUrl(card)"></div>
+                    <div v-for="(card, index) in communityCards" class="card" :class="{ empty: !card, flipped: !cardState.communityCards[index] || !card?.value, highlight: isCardHighlighted(card), 'highlight-kicker': isCardHighlightedKicker(card) }">
+                        <div class="front" :style="cardStyle(card)"></div>
                         <div class="back"></div>
                     </div>
                 </div>
@@ -292,21 +292,3 @@ createApp({
 
     `
 }).mount('#app');
-
-
-/* <h3>{{getPlayer(result.id)?.name}} Rank {{result.rank}}</h3>
-            <div>{{result.hand.type.name}}</div>
-            <div>
-                <h5>Hand</h5>
-                <div v-for="(card, index) in result.hand.hand" class="card">
-                    <div class="front" :style="cardUrl(card)"></div>
-                    <div class="back"></div>
-                </div>
-
-                <h5>Kickers</h5>
-                <div v-for="(card, index) in result.hand.kickers" class="card">
-                    <div class="front" :style="cardUrl(card)"></div>
-                    <div class="back"></div>
-                </div>
-                <hr>
-            </div> */

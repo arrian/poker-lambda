@@ -194,20 +194,39 @@ Hand.Type = {
 	}
 };
 
+
+
 class Player {
 	id: string
 	name: string
+	connectionId: string
 	worth: number
 
 	left: boolean
 
-	constructor(name: string) {
+	constructor(name: string, connectionId?: string) {
 		this.id = cuid();
 		this.name = name;
+		this.connectionId = connectionId;
 
 		this.worth = 3000; // temp value
 
 		this.left = false;
+	}
+
+	static serialize(player: Player) : PlayerSerialized {
+		return {
+			...player
+		};
+	}
+
+	static deserialize(data: PlayerSerialized) : Player {
+		const player = new Player(data.name);
+		player.id = data.id;
+		player.worth = data.worth;
+		player.left = data.left;
+
+		return player;
 	}
 }
 
@@ -269,6 +288,7 @@ interface Rules {
 
 interface RoundResult {
 	players: Record<PlayerId, Hand>
+	losses: Record<PlayerId, number>
 	pots: Pot[]
 }
 
@@ -277,7 +297,6 @@ interface Pot {
 	total: number
 	rankings: Record<PlayerId, number>
 	winnings: Record<PlayerId, number>
-	losses: Record<PlayerId, number>
 }
 
 interface LogItem {
@@ -362,6 +381,33 @@ class Round extends EventEmitter {
 		this.blinds = {};
 
 		this.progress = Round.State.STARTING;
+	}
+
+	static serialize(round: Round) : RoundSerialized {
+		return {
+			...round,
+			players: round.players.map(player => Player.serialize(player))
+		};
+	}
+
+	static deserialize(data: RoundSerialized | null) : Round | null {
+		if(!data) return null;
+
+		const players = data.players.map(player => Player.deserialize(player));
+		const round = new Round(players, data.rules);
+		round.id = data.id;
+		round.communityCards = data.communityCards; // TODO: serialize / deserialize cards
+		round.deck = data.deck;
+		round.playersData = data.playersData;
+		round.actingPlayer = data.actingPlayer;
+		round.rules = data.rules;
+		round.pots = data.pots;
+		round.progress = data.progress;
+		round.results = data.results;
+		round.betIncrement = data.betIncrement;
+		round.blinds = data.blinds;
+
+		return round;
 	}
 
 	start() {
@@ -754,7 +800,6 @@ class Round extends EventEmitter {
 		while(includedPlayers.length > 1) {
 			// let participants : Record<PlayerId, Hand> = {};
 			let winnings : Record<PlayerId, number> = {};
-			let losses : Record<PlayerId, number> = {};
 			let rankings : Record<PlayerId, number> = {};
 
 			const currentBetSize = Math.min(...this.players.map(player => this.playersData[player.id].bet).filter(bet => bet > previousBetSize));
@@ -773,21 +818,11 @@ class Round extends EventEmitter {
 				winnings[playerId] = Math.floor(total / winningPlayers.length); // TODO: fractions should go to player closest to dealer
 			});
 
-			// Calculate total amount lost
-			Object.entries(this.playersData).forEach(([playerId, data]) => {
-				if(data.bet) {
-					if(losses[playerId]) {
-						losses[playerId] -= data.bet;
-					} else {
-						losses[playerId] = -data.bet;
-					}
-				}
-			});
+
 
 			pots.push({
 				players: includedPlayers,
 				winnings,
-				losses,
 				rankings,
 				total
 			});
@@ -796,8 +831,22 @@ class Round extends EventEmitter {
 			includedPlayers = Object.values(this.playersData).filter(data => this.playersData[data.player].bet > currentBetSize).map(data => data.player);
 		}
 
+		let losses : Record<PlayerId, number> = {};
+
+		// Calculate total amount lost
+		Object.entries(this.playersData).forEach(([playerId, data]) => {
+			if(data.bet) {
+				if(losses[playerId]) {
+					losses[playerId] -= data.bet;
+				} else {
+					losses[playerId] = -data.bet;
+				}
+			}
+		});
+
 		return {
 			players: playerHands,
+			losses,
 			pots
 		};
 	}
@@ -862,7 +911,34 @@ interface TablePartial {
 }
 
 interface TableSerialized {
+	id: string
 	name: string
+	players: PlayerSerialized[]
+	round: RoundSerialized | null
+	rules: Rules
+	log: Array<LogItem>
+}
+
+interface PlayerSerialized {
+	id: string
+	name: string
+	worth: number
+	left: boolean
+}
+
+interface RoundSerialized {
+	id: string
+	communityCards: Cards
+	deck: Cards
+	players: PlayerSerialized[]
+	playersData: Record<PlayerId, PlayerData>
+	actingPlayer?: PlayerId | null
+	rules: Rules
+	pots: Array<Pot>
+	progress: RoundState
+	results: RoundResult | null
+	betIncrement: number
+	blinds: Record<PlayerId, RuleBlind>
 }
 
 class Table extends EventEmitter {
@@ -941,16 +1017,7 @@ class Table extends EventEmitter {
 	}
 
 	nextRound() {
-		if(this.players.length < 2) {
-			throw new Error(`Can't start round with fewer than 2 players`);
-		}
-
-		this.rules.button = this.rules.button ? this.getNextPlayer(this.rules.button) : this.players[0].id;
-		this.players = this.players.filter(player => !player.left);
-		this.round = new Round(this.players, this.rules);
-
-
-		this.emit('next');
+		this.startRound();
 	}
 
 	endRound() {
@@ -967,11 +1034,15 @@ class Table extends EventEmitter {
 		// Distribute winnings
 		console.log('winnings', results);
 		results.pots.forEach(pot => {
-			[...Object.entries(pot.winnings), ...Object.entries(pot.losses)].forEach(([playerId, amount]) => {
+			Object.entries(pot.winnings).forEach(([playerId, amount]) => {
 				const player = this.getPlayer(playerId);
 				if(player) player.worth += amount;
 			});
 		})
+		Object.entries(results.losses).forEach(([playerId, amount]) => {
+			const player = this.getPlayer(playerId);
+			if(player) player.worth += amount;
+		});
 		this.emit('ended');
 	}
 
@@ -1014,6 +1085,10 @@ class Table extends EventEmitter {
 	getPlayer(playerId: PlayerId) {
 		return this.players.find(player => playerId === player.id);
 	}
+
+	getPlayerByConnectionId(connectionId: string) {
+		return this.players.find(player => player.connectionId === connectionId);
+	}
 	
 	getNextPlayer(playerId: PlayerId) {
 		const activePlayers = this.players.filter(player => !player.left || player.id === playerId).map(player => player.id);
@@ -1021,7 +1096,7 @@ class Table extends EventEmitter {
 		return activePlayers[index + 1 >= activePlayers.length ? 0 : index + 1];
 	}
 
-	static getPlayersDataPartial(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
+	static serializePlayersDataPartial(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
 		const playersDataResult : Record<PlayerId, PlayerData> = {};
 		Object.entries(playersData).forEach(([key, value]) => {
 			console.log('entry', key, value);
@@ -1044,7 +1119,7 @@ class Table extends EventEmitter {
 	 * @param table Source table data
 	 * @returns Partial knowledge table information
 	 */
-	static getTablePartial(playerId: PlayerId | null, table: Table) : TablePartial {
+	static serializePartial(playerId: PlayerId | null, table: Table) : TablePartial {
 		const player = playerId ? table.round?.getPlayer(playerId) : null;
 
 		return {
@@ -1053,7 +1128,7 @@ class Table extends EventEmitter {
 				...table.round,
 				actingPlayerActions: player ? table.round.getValidActions(player) : [],
 				deck: player ? new Cards() : table.round.deck, // dealer deck is not known
-				playersData: player ? Table.getPlayersDataPartial(player, table.round.playersData, table.round) : table.round.playersData,
+				playersData: player ? Table.serializePlayersDataPartial(player, table.round.playersData, table.round) : table.round.playersData,
 				potSize: table.round.getPotSize(),
 				betSize: table.round.getBetSize()
 			} : null,
@@ -1061,6 +1136,23 @@ class Table extends EventEmitter {
 			SuitName,
 			player: player
 		}
+	}
+
+	static serialize(table: Table) : TableSerialized {
+		return {
+			...table
+		};
+	}
+
+	static deserialize(data: TableSerialized) : Table {
+		const table = new Table(data.name);
+		table.id = data.id;
+		table.players = data.players.map(player => Player.deserialize(player));
+		table.round = Round.deserialize(data.round);
+		table.rules = data.rules;
+		table.log = data.log;
+
+		return table;
 	}
 
 }
