@@ -19,9 +19,10 @@ const ActionText = {
 createApp({
     data() {
         return {
+            showOverview: true,
+            games: null,
             table: null,
             tableString: null,
-            message: 'Hello Vue!',
             input: 0,
             inputs: {},
             showDebug: false,
@@ -42,22 +43,80 @@ createApp({
                 communityCards: [false, false, false, false, false],
                 playerCards: ['undealt', false]
             },
-            highlightPlayer: null
+            highlightPlayer: null,
+            playerName: '',
+            tableName: ''
         }
     },
     async mounted() {
-        this.socket = io();
-        this.socket.on('connect', () => {
-            this.connection = ConnectionStatus.Connected;
-            console.log('connected');
-        });
-        this.socket.on('disconnect', () => {
-            this.connection = ConnectionStatus.Disconnected;
-        });
-        this.socket.on('status', table => {
-            console.log('status', table);
-            this.onUpdate(table);
-        });
+        const RAW_SOCKETS = true;
+        this.send = () => {};
+        if(RAW_SOCKETS) {
+            this.rawSocket = new WebSocket('ws://localhost:3001/Local');
+            this.queue = [];
+
+            this.sendQueuedMessages = () => {
+                if(this.connection === ConnectionStatus.Connected) {
+                    while(this.queue.length) {
+                        const message = this.queue.shift();
+                        console.log('sending message', message);
+                        this.rawSocket.send(message);
+                    }
+                }
+            }
+
+            this.rawSocket.onopen = event => {
+                this.connection = ConnectionStatus.Connected;
+                console.log('connected');
+                this.sendQueuedMessages();
+            };
+            this.rawSocket.onclose = event => {
+                this.connection = ConnectionStatus.Disconnected;
+                console.log('disconnected');
+            };
+            this.rawSocket.onmessage = event => {
+                console.log('event', event);
+                const data = JSON.parse(event.data);
+                if(data.route === 'status') {
+                    this.onUpdate(data.data);
+                } else if(data.route === 'list') {
+                    console.log('list', data.data);
+                    this.games = data.data.games;
+                }
+            }
+            this.send = async (route, tableId, action, data) => {
+                this.queue.push(JSON.stringify({
+                    route,
+                    tableId: tableId ? tableId : null,
+                    action: action ? action : null,
+                    data: data ? data : null
+                }));
+                this.sendQueuedMessages();
+            }
+
+        } else {
+            this.socket = io();
+            this.socket.on('connect', () => {
+                this.connection = ConnectionStatus.Connected;
+                console.log('connected');
+            });
+            this.socket.on('disconnect', () => {
+                this.connection = ConnectionStatus.Disconnected;
+            });
+            this.socket.on('status', table => {
+                console.log('status', table);
+                this.onUpdate(table);
+            });
+            this.send = (route, table, action, data) => {
+                return this.socket.emit(route, {
+                    player: this.player,
+                    action,
+                    data: data || {}
+                });
+            }
+        }
+
+        this.listGames();
     },
     computed: {
         actingPlayer() {
@@ -83,11 +142,6 @@ createApp({
                 return kicker && kicker.filter(kickerCard => kickerCard.value === card.value && kickerCard.suit === card.suit).length;
             }
             return false;
-        },
-        async load() {
-            const result = await fetch('/status?player=3').then(response => response.json());
-            this.onUpdate(result);
-            return result;
         },
         onUpdate(table) {
             const isInitialLoad = !this.table;
@@ -156,21 +210,85 @@ createApp({
             
         },
         async sendAction(player, action, data) {
-            this.socket.emit('action', {
-                player,
-                action,
-                data: data || {}
-            }, table => {
-                console.log('action response', table);
-                this.onUpdate(table);
+            this.send('action', this.table.id, action, data);
+            // this.socket.emit('action', {
+            //     player,
+            //     action,
+            //     data: data || {}
+            // }, table => {
+            //     console.log('action response', table);
+            //     this.onUpdate(table);
+            // });
+        },
+        listGames() {
+            this.send('list');
+            this.showOverview = true;
+        },
+        startGame() {
+            this.send('start', null, null, {
+                tableName: this.tableName,
+                playerName: this.playerName
             });
+            this.showOverview = false;
+        },
+        joinGame(tableId) {
+            this.send('join', tableId, null, {
+                playerName: this.playerName
+            });
+            this.showOverview = false;
+        },
+        leaveGame() {
+            this.send('leave', this.table.id);
+            this.showOverview = true;
         }
     },
-      // {{ $refs.playerCards }}
     template: `
-    <div v-if="table" class="poker container">
+    <div class="game-overview" v-if="showOverview">
+        <div class="game-overview-inner">
+            <h1>Poker</h1>
+            <fieldset>
+                <label>
+                    <div>
+                        Player name <input v-model="playerName" placeholder="Example Player" type="text" />
+                    </div>
+                </label>
+            </fieldset>
+            <hr>
+            <div class="game-picker">
+                <div v-if="(games && games.length) || !games">
+                    <h2>Active Games</h2>
+                    <div v-if="games && games.length">
+                        <button v-for="game in games" @click="joinGame(game.tableId)">Join {{ game.name }} ({{ game.playerCount}} player<template v-if="game.playerCount !== 1">s</template>)</button>
+                    </div>
+                    <div v-else>
+                        Loading games...
+                    </div>
+                </div>
+                <div>
+                    <h2>New Game</h2>
+                    <fieldset>
+                        <label>
+                            <div>
+                                Game name <input placeholder="Example Game" v-model="tableName" type="text" />
+                            </div>
+                        </label>
+                    </fieldset>
+                    <button @click="startGame()">Create Game</button>
+                </div>
+               
+            </div>
+        </div>
+    </div>
+
+    <div v-else-if="table" class="poker container">
         <div class="badge urgent connection" :style="connection === ConnectionStatus.Disconnected ? 'opacity: 1; visibility: visible' : 'opacity: 0; visibility: hidden'">
             Disconnected</div>
+
+        <div class="table-header">
+            <button class="button secondary small" @click="leaveGame()">&larr; Leave</button>
+            <h2>{{ table.name }}</h2>
+        </div>
+
 
         <div class="table-grid">
             <div v-if="table.players" v-for="(player, index) in table.players" class="player" :style="playerGridStyle(index, player)">
@@ -288,6 +406,10 @@ createApp({
             <summary>Json</summary>
             <pre>{{tableString}}</pre>
         </details>
+    </div>
+
+    <div v-else>
+        Loading...
     </div>
 
     `

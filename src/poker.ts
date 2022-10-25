@@ -221,7 +221,7 @@ class Player {
 	}
 
 	static deserialize(data: PlayerSerialized) : Player {
-		const player = new Player(data.name);
+		const player = new Player(data.name, data.connectionId);
 		player.id = data.id;
 		player.worth = data.worth;
 		player.left = data.left;
@@ -307,13 +307,64 @@ interface LogItem {
 }
 
 // Round specific player data
-interface PlayerData {
+class PlayerData {
+	order: number
+	player: PlayerId
+	acted: boolean
+	action: ActionType | null
+	bet: number
+	cards: Cards
+
+	static serialize(playersData : Record<PlayerId, PlayerData>) : Record<PlayerId, PlayerDataSerialized> {
+		const result : Record<PlayerId, PlayerDataSerialized> = {};
+
+		Object.entries(playersData).forEach(([key, value]) => {
+			result[key] = {
+				...value,
+				cards: Cards.serialize(value.cards)
+			};
+		});
+
+		return result;
+	}
+
+	static deserialize(playersData : Record<PlayerId, PlayerDataSerialized>) : Record<PlayerId, PlayerData> {
+		const result : Record<PlayerId, PlayerData> = {};
+
+		Object.entries(playersData).forEach(([key, value]) => {
+			result[key] = {
+				...value,
+				cards: Cards.deserialize(value.cards)
+			};
+		});
+
+		return result;
+	}
+
+	static serializePartial(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
+		const playersDataResult : Record<PlayerId, PlayerData> = {};
+		Object.entries(playersData).forEach(([key, value]) => {
+			console.log('entry', key, value);
+			if(!player || key === player.id) {
+				playersDataResult[key] = value;
+			} else {
+				playersDataResult[key] = {
+					...value,
+					cards: round.hasEnded() && round.isActivePlayer(key) ? value.cards : Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand unless ended
+				};
+			}
+		});
+		return playersDataResult;
+	}
+}
+
+interface PlayerDataSerialized {
 	order: number,
 	player: PlayerId,
 	acted: boolean,
 	action: ActionType | null,
 	bet: number,
-	cards: Cards
+	cards: string[]
 }
 
 type RoundState = string;
@@ -386,7 +437,10 @@ class Round extends EventEmitter {
 	static serialize(round: Round) : RoundSerialized {
 		return {
 			...round,
-			players: round.players.map(player => Player.serialize(player))
+			players: round.players.map(player => Player.serialize(player)),
+			deck: Cards.serialize(round.deck),
+			communityCards: Cards.serialize(round.communityCards),
+			playersData: PlayerData.serialize(round.playersData)
 		};
 	}
 
@@ -396,9 +450,9 @@ class Round extends EventEmitter {
 		const players = data.players.map(player => Player.deserialize(player));
 		const round = new Round(players, data.rules);
 		round.id = data.id;
-		round.communityCards = data.communityCards; // TODO: serialize / deserialize cards
-		round.deck = data.deck;
-		round.playersData = data.playersData;
+		round.communityCards = Cards.deserialize(data.communityCards); // TODO: serialize / deserialize cards
+		round.deck = Cards.deserialize(data.deck);
+		round.playersData = PlayerData.deserialize(data.playersData);
 		round.actingPlayer = data.actingPlayer;
 		round.rules = data.rules;
 		round.pots = data.pots;
@@ -921,6 +975,7 @@ interface TableSerialized {
 
 interface PlayerSerialized {
 	id: string
+	connectionId: string
 	name: string
 	worth: number
 	left: boolean
@@ -928,10 +983,10 @@ interface PlayerSerialized {
 
 interface RoundSerialized {
 	id: string
-	communityCards: Cards
-	deck: Cards
+	communityCards: string[]
+	deck: string[]
 	players: PlayerSerialized[]
-	playersData: Record<PlayerId, PlayerData>
+	playersData: Record<PlayerId, PlayerDataSerialized>
 	actingPlayer?: PlayerId | null
 	rules: Rules
 	pots: Array<Pot>
@@ -975,9 +1030,9 @@ class Table extends EventEmitter {
 
 	act(playerId: PlayerId, action: Action) {
 		console.log('act', playerId, action);
-		if(!playerId && action.type === Action.Type.ROUND_START) this.startRound();
-		else if(!playerId && action.type === Action.Type.ROUND_NEXT) this.nextRound();
-		else if(!playerId && action.type === Action.Type.ROUND_END) this.endRound();
+		if(action.type === Action.Type.ROUND_START) this.startRound();
+		else if(action.type === Action.Type.ROUND_NEXT) this.nextRound();
+		else if(action.type === Action.Type.ROUND_END) this.endRound();
 		else {
 			if(!this.round) throw new Error('No round currently active');
 			const player = this.round.getPlayer(playerId);
@@ -1047,6 +1102,16 @@ class Table extends EventEmitter {
 	}
 
 	join(player: Player) {
+		if(player.connectionId) {
+			const rejoinedPlayer = this.players.find(p => player.connectionId === p.connectionId);
+			if(rejoinedPlayer) {
+				rejoinedPlayer.name = player.name;
+				rejoinedPlayer.left = false;
+				this.emit('rejoined');
+				return;
+			}
+		} 
+
 		if(this.players.length >= MAX_PLAYERS) throw new Error(`Player can't join. The table is full`);
 		this.players.push(player);
 
@@ -1096,22 +1161,6 @@ class Table extends EventEmitter {
 		return activePlayers[index + 1 >= activePlayers.length ? 0 : index + 1];
 	}
 
-	static serializePlayersDataPartial(player : Player, playersData : Record<PlayerId, PlayerData>, round : Round) {
-		const playersDataResult : Record<PlayerId, PlayerData> = {};
-		Object.entries(playersData).forEach(([key, value]) => {
-			console.log('entry', key, value);
-			if(!player || key === player.id) {
-				playersDataResult[key] = value;
-			} else {
-				playersDataResult[key] = {
-					...value,
-					cards: round.hasEnded() && round.isActivePlayer(key) ? value.cards : Cards.createDeckUnkownCards(value.cards.count()) // players shouldn't know other players hand unless ended
-				};
-			}
-		});
-		return playersDataResult;
-	}
-
 	/**
 	 * Get subset of the table based on what a player knows.
 	 *  
@@ -1128,7 +1177,7 @@ class Table extends EventEmitter {
 				...table.round,
 				actingPlayerActions: player ? table.round.getValidActions(player) : [],
 				deck: player ? new Cards() : table.round.deck, // dealer deck is not known
-				playersData: player ? Table.serializePlayersDataPartial(player, table.round.playersData, table.round) : table.round.playersData,
+				playersData: player ? PlayerData.serializePartial(player, table.round.playersData, table.round) : table.round.playersData,
 				potSize: table.round.getPotSize(),
 				betSize: table.round.getBetSize()
 			} : null,
@@ -1140,7 +1189,9 @@ class Table extends EventEmitter {
 
 	static serialize(table: Table) : TableSerialized {
 		return {
-			...table
+			...table,
+			round: table.round ? Round.serialize(table.round) : null,
+			players: table.players ? table.players.map(player => Player.serialize(player)) : [],
 		};
 	}
 

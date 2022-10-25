@@ -93,6 +93,14 @@ export class Card {
 		return colors.black.bgWhite(string);
 	}
 
+	static serialize(card) : string {
+		return card.value + card.suit;
+	}
+
+	static deserialize(data) : Card {
+		return new Card(data);
+	}
+
 	toString() {
 		return Card.toString(this);
 	}
@@ -142,6 +150,14 @@ export class Cards {
 		} else {
 			this.cards = [];
 		}
+	}
+
+	static serialize(cards) : string[] {
+		return cards.cards.map(card => Card.serialize(card));
+	}
+
+	static deserialize(data: string[]) {
+		return new Cards(data.map(cardData => Card.deserialize(cardData)));
 	}
 
 	add(card:Card) {

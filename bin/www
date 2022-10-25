@@ -5,8 +5,11 @@
  */
 
 var app = require('../app');
-var debug = require('debug')('cribbage-js:server');
+var debug = require('debug')('poker-js:server');
 var http = require('http');
+const { createProxyMiddleware } = require('http-proxy-middleware');
+
+const PROXY_SOCKETS = false;
 
 /**
  * Get port from environment and store in Express.
@@ -22,9 +25,16 @@ app.set('port', port);
 var server = http.createServer(app);
 
 // Socket connection
-const io = require('socket.io')(server);
-io.on('connection', app.socketConnection);
-app.socketBroadcast = io.emit;
+if(PROXY_SOCKETS) {
+  // proxy websocket server
+  const wsProxy = createProxyMiddleware('ws://localhost:3001/Local');
+  app.use(wsProxy);
+
+} else {
+  const io = require('socket.io')(server);
+  io.on('connection', app.socketConnection);
+  app.socketBroadcast = io.emit;
+}
 
 /**
  * Listen on provided port, on all network interfaces.

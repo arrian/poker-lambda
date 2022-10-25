@@ -1,6 +1,6 @@
 const _ = require('lodash');
 const assert = require('assert');
-const { Hand, Cards, Card, Value, Suit, Round, Player, Action } = require('../cribbage');
+const { Hand, Cards, Card, Value, Suit, Round, Player, Action } = require('../poker');
 
 describe('Cards', function() {
 	describe('getStraight()', function() {
