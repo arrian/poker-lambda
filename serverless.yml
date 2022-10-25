@@ -41,16 +41,6 @@ resources:
 functions:
   ping:
     handler: src/functions/handler.ping
-  # startGame:
-  #   handler: src/functions/handler.startGame
-  # getAllGames:
-  #   handler: src/functions/handler.getAllGames
-  # onClientConnected:
-  #   handler: src/functions/handler.onClientConnected
-  # onClientAction:
-  #   handler: src/functions/handler.onClientAction
-  # onClientDisconnected:
-  #   handler: src/functions/handler.onClientDisconnected
   websocket:
    handler: src/functions/handler.websocket
    events:

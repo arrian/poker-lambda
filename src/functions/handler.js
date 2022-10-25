@@ -3,34 +3,22 @@ const cuid = require('cuid');
 const colors = require('colors');
 var { Table, Player } = require('../poker');
 
+const client = new AWS.ApiGatewayManagementApi({
+  apiVersion: '2018-11-29',
+  endpoint: `http://localhost:3001`,
+  region: 'localhost'
+});
 
-
-exports.example = async (event) => {
-  const apigwManagementApi = new AWS.ApiGatewayManagementApi({
-    apiVersion: '2018-11-29',
-    endpoint: event.requestContext.domainName + '/' + event.requestContext.stage
-  });
-  send = async (connectionId, data) => {
-    await apigwManagementApi.postToConnection({ ConnectionId: connectionId, Data: `Echo: ${data}` }).promise();
-  }
-  // TODO implement
-  // const response = {
-  //     statusCode: 200,
-  //     body: JSON.stringify('Hello from Lambda!'),
-  // };
-  // return response;
-};
-
-function broadcast({ player, table }) {
-  // TODO: implement ack
-}
-
-function broadcastStatus({ table, exclude = [] }) {
-  // TODO: get player connections
-  Object.entries(playerConnections).filter(([playerId, connection]) => !exclude.includes(playerId)).forEach(([playerId, connection]) => {
-    console.log('status to', playerId);
-    connection.emit('status', Table.serializePartial(playerId, table));
-  });
+function broadcast(table) {
+  return Promise.all(table.players.map(player => {
+    return client.postToConnection({
+      ConnectionId: player.connectionId,
+      Data: JSON.stringify({
+        action: 'status',
+        data: Table.serializePartial(player.id, table)
+      })
+    }).promise();
+  }));
 }
 
 const POKER_TABLE = 'pokerTable';
@@ -144,6 +132,7 @@ async function startGame(connectionId) {
 
 async function getAllGames() {
   const tableIds = await loadGames();
+  console.log('getAllGames', tableIds);
 
   return tableIds;
 }
@@ -172,8 +161,6 @@ async function onAction(connectionId, tableId, action, data) {
 
   try {
     table.act(player, { type: action, data });
-    // TODO: acknowledge(Table.serializePartial(player, table));
-    // broadcastStatus({ table, exclude: [player] });
     await storeGame(table);
   } catch (e) {
     console.error(colors.red.bold(e.message));
@@ -205,66 +192,57 @@ async function leaveGame(connectionId, tableId) {
   };
 }
 
-async function onWebsocketMessage(connectionId, body) {
-  let result;
-  switch(body.action) {
-    case 'list':
-      return getAllGames();
-    case 'start':
-      result = startGame(connectionId, body.tableId);
-      broadcast(result);
-      return result;
-    case 'join':
-      result = joinGame(connectionId, body.tableId);
-      broadcast(result);
-      return result;
-    case 'leave':
-      result = leaveGame(connectionId, body.tableId);
-      broadcast(result);
-      return result;
-    case 'action':
-      result = onAction(connectionId, body.tableId, body.action, body.data);
-      broadcast(result);
-      return result;
-    case 'default':
-      return null;
-  } 
-}
-
 async function websocket(event) {
+  const { body, requestContext: { connectionId, routeKey, domainName, stage } } = event;
 
-  console.log("EVENT: " + JSON.stringify(event, null, 2));
+  console.log('websocket', connectionId, routeKey, domainName, stage, event);
 
-  const { body, requestContext: { connectionId, routeKey }} = event;
+  let result;
 
-  switch(routeKey) {
+  switch (routeKey) {
     case '$connect':
       console.log('connect');
       break;
     case '$disconnect':
       console.log('disconnect');
       break;
-    case '$default':
-      await onWebsocketMessage(connectionId, body);
+    case 'list':
+      result = await getAllGames();
+      try {
+        await client.postToConnection({
+          ConnectionId: connectionId,
+          Data: JSON.stringify(result)
+        }).promise();
+      } catch(e) {
+        console.error(e);
+      }
+      break;
+    case 'start':
+      result = await startGame(connectionId, body.tableId);
+      broadcast(result.table);
+      break;
+    case 'join':
+      result = await joinGame(connectionId, body.tableId);
+      broadcast(result.table);
+      break;
+    case 'leave':
+      result = await leaveGame(connectionId, body.tableId);
+      broadcast(result.table);
+      break;
+    case 'action':
+      result = await onAction(connectionId, body.tableId, body.action, body.data);
+      broadcast(result.table);
+      break;
+    default:
+      console.log('unhandled websocket event');
       break;
   }
 
   return { statusCode: 200 };
 };
 
-function wrapResponse(response) {
-  return {
-    statusCode: 200,
-    body: JSON.stringify(response)
-  };
-}
 
 exports.ping = ping;
-// exports.startGame = event => wrapResponse(startGame(event.body.connectionId));
-// exports.getAllGames = event => wrapResponse(getAllGames());
-// exports.onClientConnected = event => wrapResponse(joinGame(event.body.connectionId, event.body.tableId));
-// exports.onClientAction = event => wrapResponse(onAction(event.body.connectionId, event.body.tableId, event.body.action, event.body.data));
-// exports.onClientDisconnected = event => wrapResponse(leaveGame(event.body.connectionId, event.body.tableId));
 exports.websocket = websocket;
 
 
