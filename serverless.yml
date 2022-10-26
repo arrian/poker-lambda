@@ -13,11 +13,31 @@ custom:
       migrate: true
       seed: true
       convertEmptyValues: true
+  dotenv:
+    exclude:
+      - AWS_REGION
+      - AWS_ACCESS_KEY
+      - AWS_SECRET_ACCESS_KEY
+      - DYNAMODB_ENDPOINT
+      - GATEWAY_ENDPOINT
 
 provider:
   name: aws
   runtime: nodejs16.x
   websocketsApiRouteSelectionExpression: $request.body.route
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:DescribeTable
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource:
+        - "Fn::GetAtt": [ PokerTable, Arn ]
+
 
 plugins:
   - serverless-dynamodb-local
@@ -27,7 +47,7 @@ plugins:
   - serverless-offline
 resources:
   Resources:
-    UsersTable:
+    PokerTable:
       Type: AWS::DynamoDB::Table
       Properties:
         AttributeDefinitions:
@@ -49,4 +69,19 @@ functions:
      - websocket:
          route: $disconnect
      - websocket:
-         route: $default
+         route: list
+     - websocket:
+         route: start
+     - websocket:
+         route: join
+     - websocket:
+         route: leave
+     - websocket:
+         route: action
+package:
+  patterns:
+    - '!node_modules/**'
+    - 'node_modules/cuid/**'
+    - 'node_modules/colors/**'
+    - 'node_modules/lodash/**'
+    - 'node_modules/events/**'

@@ -7,7 +7,11 @@
     "start": "ts-node ./bin/www",
     "debug": "node --inspect -r ts-node/register ./bin/www",
     "test-ws": "node test-ws.js",
-    "offline": "serverless offline start"
+    "offline": "serverless offline start",
+    "deploy-dev": "serverless deploy --stage dev --verbose",
+    "deploy-prod": "serverless deploy --stage prod --verbose",
+    "deploy-dev-websocket": "serverless deploy --stage dev --verbose --function websocket",
+    "deploy-prod-websocket": "serverless deploy --stage prod --verbose --function websocket"
   },
   "engines": {
     "node": ">=14.15.0"

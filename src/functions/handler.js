@@ -54,7 +54,7 @@ async function loadGames() {
   const params = {
     TableName: POKER_TABLE,
     limit: 100,
-    projectionExpression: 'tableId, name, playerCount'
+    projectionExpression: 'tableId, name, playerCount, playerConnections, playerNames'
   }
 
   const results = await dbClient.scan(params).promise();
@@ -77,10 +77,9 @@ async function loadGame(tableId) {
   const params = {
     TableName: POKER_TABLE,
     Key: {
-      tableId: tableId,
-
+      tableId: tableId
     }
-  }
+  };
 
   const { Item } = await dbClient.get(params).promise();
   if (Item) {
@@ -101,11 +100,32 @@ async function storeGame(table) {
       tableId: table.id,
       data: Table.serialize(table),
       name: table.name,
-      playerCount: table.players.length
+      playerCount: table.players.length,
+      playerConnections: {
+        SS: table.players.map(player => player.connectionId)
+      },
+      playerNames: {
+        SS: table.players.map(player => player.name)
+      }
     }
   };
 
   await dbClient.put(params).promise();
+
+  return true;
+}
+
+async function removeGame(table) {
+  const dbClient = getDatabaseClient();
+  
+  const params = {
+    TableName: POKER_TABLE,
+    Key: {
+      tableId: table.id
+    }
+  };
+
+  await dbClient.delete(params).promise();
 
   return true;
 }
@@ -183,8 +203,12 @@ async function leaveGame(connectionId, tableId) {
   }
 
   table.leave(player);
-  // TODO: if(table.players.length < 1) 
-  await storeGame(table);
+
+  if(table.players.length < 1) {
+    await removeGame(table);
+  } else {
+    await storeGame(table);
+  }
 
   return {
     table,
@@ -194,44 +218,44 @@ async function leaveGame(connectionId, tableId) {
 
 async function websocket(event) {
   try {
-  const { body, requestContext: { connectionId, routeKey, domainName, stage } } = event;
-  const { route, tableId, action, data } = body && typeof body === 'string' ? JSON.parse(body) : {};
+    const { body, requestContext: { connectionId, routeKey, domainName, stage } } = event;
+    const { route, tableId, action, data } = body && typeof body === 'string' ? JSON.parse(body) : {};
 
-  console.log('websocket', connectionId, routeKey, domainName, stage, event);
+    console.log('websocket', connectionId, routeKey, domainName, stage, event);
 
-  let result;
+    let result;
 
-  switch (routeKey) {
-    case '$connect':
-      console.log('connect');
-      break;
-    case '$disconnect':
-      console.log('disconnect');
-      break;
-    case 'list':
-      result = await getAllGames();
-      await send(connectionId, { route: 'list', data: { games: result } });
-      break;
-    case 'start':
-      result = await startGame(connectionId, data.tableName, data.playerName);
-      await broadcast(result.player, result.table);
-      break;
-    case 'join':
-      result = await joinGame(connectionId, tableId, data.playerName);
-      await broadcast(result.player, result.table);
-      break;
-    case 'leave':
-      result = await leaveGame(connectionId, tableId);
-      await broadcast(result.player, result.table);
-      break;
-    case 'action':
-      result = await onAction(connectionId, tableId, action, data);
-      await broadcast(result.player, result.table);
-      break;
-    default:
-      console.log('unhandled websocket event');
-      break;
-  }
+    switch (routeKey) {
+      case '$connect':
+        console.log('connect');
+        break;
+      case '$disconnect':
+        console.log('disconnect');
+        break;
+      case 'list':
+        result = await getAllGames();
+        await send(connectionId, { route: 'list', data: { games: result } });
+        break;
+      case 'start':
+        result = await startGame(connectionId, data.tableName, data.playerName);
+        await broadcast(result.player, result.table);
+        break;
+      case 'join':
+        result = await joinGame(connectionId, tableId, data.playerName);
+        await broadcast(result.player, result.table);
+        break;
+      case 'leave':
+        result = await leaveGame(connectionId, tableId);
+        await broadcast(result.player, result.table);
+        break;
+      case 'action':
+        result = await onAction(connectionId, tableId, action, data);
+        await broadcast(result.player, result.table);
+        break;
+      default:
+        console.log('unhandled websocket event');
+        break;
+    }
   } catch(e) {
     console.error(colors.red.bold(e.message));
     console.error(colors.red.bold(e.stack));
