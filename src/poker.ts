@@ -10,6 +10,7 @@ const HAND_SIZE = 5;
 const ACTION_TIME_LIMIT = 1000;
 const MAX_PLAYERS = 8;
 
+
 type PlayerId = string;
 
 interface HandMatcher {
@@ -397,7 +398,7 @@ class Round extends EventEmitter {
 
 	static State: Record<string, RoundState>
 
-	constructor(players: Player[], rules: Rules) {
+	constructor(players: Player[], rules?: Rules) {
 		super();
 
 		this.id = cuid();
@@ -417,7 +418,13 @@ class Round extends EventEmitter {
 				cards: new Cards()
 			};
 		});
-		this.rules = rules;
+		this.rules = rules ? rules : {
+			ante: 0,
+			blinds: [],
+			button: null,
+			limit: 0,
+			raiseMinimum: false
+		};
 		this.rules.button = this.rules.button || players[0].id;
 		
 		this.actingPlayer = this.getNextPlayer(this.rules.button)?.id;

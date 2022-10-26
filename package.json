@@ -11,7 +11,8 @@
     "deploy-dev": "serverless deploy --stage dev --verbose",
     "deploy-prod": "serverless deploy --stage prod --verbose",
     "deploy-dev-websocket": "serverless deploy --stage dev --verbose --function websocket",
-    "deploy-prod-websocket": "serverless deploy --stage prod --verbose --function websocket"
+    "deploy-prod-websocket": "serverless deploy --stage prod --verbose --function websocket",
+    "test": "npx jest"
   },
   "engines": {
     "node": ">=14.15.0"

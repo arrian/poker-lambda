@@ -1,6 +1,6 @@
 const _ = require('lodash');
 const assert = require('assert');
-const { Hand, Cards, Card, Value, Suit, Round, Player, Action } = require('../poker');
+const { Hand, Cards, Card, Value, Suit, Round, Player, Action } = require('../src/poker');
 
 describe('Cards', function() {
 	describe('getStraight()', function() {
@@ -124,6 +124,8 @@ describe('Round', function() {
 				player2 = new Player('player2'),
 				round = new Round([player1, player2], null);
 
+			round.start();
+
 			assert(round.isAwaitingAction());
 		});
 
@@ -131,6 +133,8 @@ describe('Round', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
 				round = new Round([player1, player2], null);
+
+			round.start();
 
 			round.act(player2, new Action(Action.Type.BET, { value: 100 }));
 
@@ -142,6 +146,8 @@ describe('Round', function() {
 				player2 = new Player('player2'),
 				round = new Round([player1, player2], null);
 
+			round.start();
+
 			round.act(player2, new Action(Action.Type.FOLD));
 
 			assert(!round.isAwaitingAction());
@@ -151,6 +157,8 @@ describe('Round', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
 				round = new Round([player1, player2], null);
+
+			round.start();
 
 			round.act(player2, new Action(Action.Type.BET, { value: 100 }));
 			round.act(player1, new Action(Action.Type.CALL, { value: 100 }));
@@ -165,6 +173,8 @@ describe('Round', function() {
 			var player1 = new Player('player 1'),
 				round = new Round([player1]);
 
+			round.start();
+
 			round.dead(player1);
 			assert(!round.getActingPlayer());
 		});
@@ -175,6 +185,8 @@ describe('Round', function() {
 			var player1 = new Player('player1'),
 				player2 = new Player('player2'),
 				round = new Round([player1, player2]);
+
+			round.start();
 
 			assert.equal(round.progress, Round.State.DEALT, 'First game state should be DEALT');
 
